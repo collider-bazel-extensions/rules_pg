@@ -1,3 +1,4 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@rules_pg//:defs.bzl", "pg_health_check", "pg_seed_data", "pg_server", "pg_test", "postgres_schema")
 
 # ---------------------------------------------------------------------------

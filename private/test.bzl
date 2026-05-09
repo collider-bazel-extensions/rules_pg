@@ -1,5 +1,6 @@
 "pg_test macro: wraps any *_test rule with a hermetic PostgreSQL cluster."
 
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//private:binary.bzl", "PostgresBinaryInfo")
 load("//private:schema.bzl", "PostgresSchemaInfo")
 load("//private:seed.bzl", "PostgresSeedInfo")
@@ -38,7 +39,7 @@ def _pg_launcher_impl(ctx):
     manifest = ctx.actions.declare_file(ctx.label.name + "_pg_manifest.json")
     ctx.actions.write(
         output  = manifest,
-        content = manifest_content.to_json(),
+        content = json.encode(manifest_content),
     )
 
     # The launcher script itself is a source file; we just make it available.
@@ -166,7 +167,11 @@ def pg_test(
     srcs  = srcs  or []
     deps  = deps  or []
     tags  = tags  or []
-    _test_rule = test_rule or native.sh_test
+    # Bazel 8+ removed `native.sh_test`, so the default has to load
+    # from rules_shell. Consumers can override `test_rule = ...` to
+    # point at another *_test rule (py_test, go_test, etc.) if they
+    # don't want rules_shell as a transitive dep.
+    _test_rule = test_rule or sh_test
 
     # 1. Build the inner test binary (no pg awareness).
     inner_name = name + "_inner"

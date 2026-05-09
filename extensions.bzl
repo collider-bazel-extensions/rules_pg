@@ -98,10 +98,14 @@ postgres_binary_files(
     visibility = ["//visibility:public"],
 )
 
-# Also expose the full tree for advanced users.
+# Also expose the full tree for advanced users. `allow_empty` is on
+# because the system-mode repo impl symlinks only the bin/lib/share
+# files that actually exist on the host — `share/` may be empty on a
+# libpq-only install. Bazel 8+ defaults --incompatible_disallow_empty_glob
+# to True, so the opt-in is now required.
 filegroup(
     name = "all_files",
-    srcs = glob(["bin/**", "lib/**", "share/**"]),
+    srcs = glob(["bin/**", "lib/**", "share/**"], allow_empty = True),
     visibility = ["//visibility:public"],
 )
 """
@@ -216,6 +220,17 @@ def _pg_system_binary_repo_impl(rctx):
             lib_path = lib_path.strip()
             if lib_path:
                 rctx.symlink(lib_path, "lib/" + lib_path.split("/")[-1])
+
+    # Symlink share/ from the system install if `pg_config --sharedir`
+    # resolves. The all_files filegroup globs share/** so the directory
+    # has to exist (or the glob has to allow_empty — both are in place).
+    pg_config = bin_dir + "/pg_config"
+    res = rctx.execute(["sh", "-c", '"' + pg_config + '" --sharedir 2>/dev/null || true'])
+    share_dir = res.stdout.strip()
+    if share_dir:
+        res = rctx.execute(["test", "-d", share_dir])
+        if res.return_code == 0:
+            rctx.symlink(share_dir, "share")
 
     rctx.file("BUILD.bazel", _BUILD_TMPL.format(version = pg_version))
 

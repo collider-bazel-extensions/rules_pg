@@ -1,11 +1,16 @@
 module(
     name = "rules_pg",
-    version = "0.2.0",
-    compatibility_level = 1,
+    version = "0.2.1",
 )
 
 bazel_dep(name = "bazel_skylib", version = "1.5.0")
 bazel_dep(name = "platforms", version = "0.0.9")
+
+# rules_shell is part of the public surface — `pg_test` defaults to
+# `sh_test`. Bazel 8+ removed `native.sh_test`, so the macro has to
+# import it from rules_shell. Consumers transitively need it unless
+# they override `test_rule = ...` to swap in another *_test rule.
+bazel_dep(name = "rules_shell", version = "0.8.0")
 
 # Register the module extension that provides pg binaries.
 #
