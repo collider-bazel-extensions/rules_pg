@@ -1,76 +1,11 @@
-"Module extension: downloads pre-built PostgreSQL tarballs for each platform/version."
+"Module extension: registers PostgreSQL binary toolchains per (version, platform)."
 
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-
-# ---------------------------------------------------------------------------
-# Version manifest
-#
-# Each entry maps (version, platform) -> (url, sha256, strip_prefix).
-# Tarballs are the "binaries-only" distributions from the Postgres project or
-# from https://github.com/theory/pgenv.  Update these when cutting a new
-# supported version.
-#
-# URL scheme: PostgreSQL binary distributions for Linux come from the
-# EnterpriseDB "pg_binaries" builds; macOS from Postgres.app releases.
-# Both ship pg_ctl, initdb, psql, pg_isready and the shared libraries needed
-# to run a server without a full OS-level install.
-# ---------------------------------------------------------------------------
-
-_PG_VERSIONS = {
-    "14": {
-        "linux_amd64": struct(
-            url = "https://get.enterprisedb.com/postgresql/postgresql-14.11-1-linux-x64-binaries.tar.gz",
-            sha256 = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-            strip_prefix = "pgsql",
-        ),
-        "darwin_arm64": struct(
-            url = "https://get.enterprisedb.com/postgresql/postgresql-14.11-1-osx-binaries.zip",
-            sha256 = "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
-            strip_prefix = "pgsql",
-        ),
-        "darwin_amd64": struct(
-            url = "https://get.enterprisedb.com/postgresql/postgresql-14.11-1-osx-binaries.zip",
-            sha256 = "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
-            strip_prefix = "pgsql",
-        ),
-    },
-    "15": {
-        "linux_amd64": struct(
-            url = "https://get.enterprisedb.com/postgresql/postgresql-15.6-1-linux-x64-binaries.tar.gz",
-            sha256 = "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
-            strip_prefix = "pgsql",
-        ),
-        "darwin_arm64": struct(
-            url = "https://get.enterprisedb.com/postgresql/postgresql-15.6-1-osx-binaries.zip",
-            sha256 = "d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5",
-            strip_prefix = "pgsql",
-        ),
-        "darwin_amd64": struct(
-            url = "https://get.enterprisedb.com/postgresql/postgresql-15.6-1-osx-binaries.zip",
-            sha256 = "d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5",
-            strip_prefix = "pgsql",
-        ),
-    },
-    "16": {
-        "linux_amd64": struct(
-            url = "https://get.enterprisedb.com/postgresql/postgresql-16.2-1-linux-x64-binaries.tar.gz",
-            sha256 = "e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6",
-            strip_prefix = "pgsql",
-        ),
-        "darwin_arm64": struct(
-            url = "https://get.enterprisedb.com/postgresql/postgresql-16.2-1-osx-binaries.zip",
-            sha256 = "f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1",
-            strip_prefix = "pgsql",
-        ),
-        "darwin_amd64": struct(
-            url = "https://get.enterprisedb.com/postgresql/postgresql-16.2-1-osx-binaries.zip",
-            sha256 = "f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1",
-            strip_prefix = "pgsql",
-        ),
-    },
-}
+load("//tools:conda_versions.bzl", "CONDA_CLOSURES")
 
 _PLATFORMS = ["linux_amd64", "darwin_arm64", "darwin_amd64"]
+
+# Supported pg majors. Mirror the keys in CONDA_CLOSURES.
+_SUPPORTED_VERSIONS = ["14", "15", "16"]
 
 # ---------------------------------------------------------------------------
 # BUILD template injected into each repo (downloaded or system)
@@ -111,28 +46,95 @@ filegroup(
 """
 
 # ---------------------------------------------------------------------------
-# Repository rule: downloaded pre-built tarball
+# Repository rule: hermetic PostgreSQL via conda-forge closure
+#
+# `pg.version()` fetches the full transitive dependency closure for
+# postgresql=<major> from conda-forge — postgresql + libpq + libxml2 +
+# openssl + readline + krb5 + libgcc + … — and extracts every package
+# into one merged tree (bin/, lib/, share/). Conda binaries embed
+# RPATH=$ORIGIN/../lib, so each binary finds its deps relative to its
+# own location with no LD_LIBRARY_PATH munging required.
+#
+# Each .conda file is a zip containing two zstd-compressed tarballs:
+#   - pkg-<name>-<ver>.tar.zst  (the actual binaries + libs + share)
+#   - info-<name>-<ver>.tar.zst (recipe metadata — discarded)
+# Extraction: unzip → tar --zstd -xf pkg-*.tar.zst. Modern GNU tar
+# (1.31+) and BSD tar both support --zstd; the fallback path shells
+# out to `zstd -d | tar -xf -` for older hosts.
 # ---------------------------------------------------------------------------
 
 def _pg_binary_repo_impl(rctx):
-    rctx.download_and_extract(
-        url = rctx.attr.url,
-        sha256 = rctx.attr.sha256,
-        stripPrefix = rctx.attr.strip_prefix,
-    )
+    version = rctx.attr.pg_version
+    platform = rctx.attr.platform
+    closure = CONDA_CLOSURES.get((version, platform))
+    if not closure:
+        fail("rules_pg: no conda closure for postgres {} on {}".format(version, platform))
+
+    # Check for required host tools (unzip + tar with zstd support).
+    # Both are present on every supported runner (ubuntu-latest, macOS
+    # 13+, Fedora 38+). If missing, fail with an actionable error
+    # rather than producing a half-extracted tree.
+    res = rctx.execute(["sh", "-c", "command -v unzip >/dev/null"])
+    if res.return_code != 0:
+        fail(
+            "rules_pg: pg.version() requires `unzip` on PATH " +
+            "(install via `apt install unzip` / `brew install unzip`).",
+        )
+    has_tar_zstd = rctx.execute(["sh", "-c", "tar --zstd --version >/dev/null 2>&1"]).return_code == 0
+    has_zstd_cli = rctx.execute(["sh", "-c", "command -v zstd >/dev/null"]).return_code == 0
+    if not (has_tar_zstd or has_zstd_cli):
+        fail(
+            "rules_pg: pg.version() requires either GNU tar 1.31+ " +
+            "(with --zstd support) or the `zstd` CLI. Install via " +
+            "`apt install zstd` / `brew install zstd`.",
+        )
+
+    # Extract every package in the closure into the repo root,
+    # merging trees. Each package lives under a `_dl/<name>/` sandbox
+    # during its own extraction; the inner tar then materializes its
+    # contents at the repo root.
+    for i, entry in enumerate(closure):
+        # Use the package index in the path to avoid collisions if two
+        # packages happened to share the same basename (none do today,
+        # but cheap to guard against).
+        sandbox = "_dl/{}_{}".format(i, entry["name"])
+        conda_file = "{}/package.conda".format(sandbox)
+        rctx.download(
+            url = entry["url"],
+            output = conda_file,
+            sha256 = entry["sha256"],
+        )
+        res = rctx.execute(["sh", "-c", "cd {} && unzip -q package.conda".format(sandbox)])
+        if res.return_code != 0:
+            fail("rules_pg: failed to unzip {}: {}".format(entry["name"], res.stderr))
+        # Find the pkg-*.tar.zst inside (info-*.tar.zst is metadata
+        # and not extracted).
+        res = rctx.execute(["sh", "-c", "ls {}/pkg-*.tar.zst 2>/dev/null | head -1".format(sandbox)])
+        pkg_tar = res.stdout.strip()
+        if not pkg_tar:
+            fail("rules_pg: .conda package missing pkg-*.tar.zst: {}".format(entry["name"]))
+        # Extract pkg tarball to the repo root (cwd), merging.
+        if has_tar_zstd:
+            cmd = "tar --zstd -xf {}".format(pkg_tar)
+        else:
+            cmd = "zstd -d -c {} | tar -xf -".format(pkg_tar)
+        res = rctx.execute(["sh", "-c", cmd])
+        if res.return_code != 0:
+            fail("rules_pg: tar extract failed for {}: {}".format(entry["name"], res.stderr))
+
+    # Drop the download sandbox now that everything's merged.
+    rctx.execute(["rm", "-rf", "_dl"])
+
     rctx.file(
         "BUILD.bazel",
-        _BUILD_TMPL.format(version = rctx.attr.pg_version),
+        _BUILD_TMPL.format(version = version),
     )
 
 _pg_binary_repo = repository_rule(
     implementation = _pg_binary_repo_impl,
     attrs = {
-        "pg_version":    attr.string(mandatory = True),
-        "platform":      attr.string(mandatory = True),
-        "url":           attr.string(mandatory = True),
-        "sha256":        attr.string(mandatory = True),
-        "strip_prefix":  attr.string(default = ""),
+        "pg_version": attr.string(mandatory = True),
+        "platform":   attr.string(mandatory = True),
     },
 )
 
@@ -315,11 +317,11 @@ _pg_system_binary_repo = repository_rule(
 # ---------------------------------------------------------------------------
 
 _version_tag = tag_class(attrs = {
-    "versions": attr.string_list(default = ["14"]),
+    "versions": attr.string_list(default = ["16"]),
 })
 
 _system_tag = tag_class(attrs = {
-    "versions": attr.string_list(default = ["14"]),
+    "versions": attr.string_list(default = ["16"]),
     "bin_dir":  attr.string(default = ""),
     "lib_dir":  attr.string(default = ""),
 })
@@ -340,12 +342,12 @@ def _pg_extension_impl(module_ctx):
                 if v not in system_cfg:
                     download_versions[v] = True
 
-    # Validate all versions.
+    # Validate all versions against the supported set.
     for version in list(system_cfg.keys()) + list(download_versions.keys()):
-        if version not in _PG_VERSIONS:
+        if version not in _SUPPORTED_VERSIONS:
             fail("Unsupported PostgreSQL version: {}. Supported: {}".format(
                 version,
-                ", ".join(_PG_VERSIONS.keys()),
+                ", ".join(_SUPPORTED_VERSIONS),
             ))
 
     # Create system repos.
@@ -358,17 +360,13 @@ def _pg_extension_impl(module_ctx):
                 lib_dir = cfg["lib_dir"],
             )
 
-    # Create download repos.
+    # Create hermetic (conda-closure-backed) repos.
     for version in download_versions.keys():
         for platform in _PLATFORMS:
-            spec = _PG_VERSIONS[version][platform]
             _pg_binary_repo(
                 name = "pg_{}_{}".format(version, platform),
                 pg_version = version,
                 platform = platform,
-                url = spec.url,
-                sha256 = spec.sha256,
-                strip_prefix = spec.strip_prefix,
             )
 
 pg = module_extension(

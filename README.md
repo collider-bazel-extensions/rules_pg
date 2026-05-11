@@ -47,16 +47,15 @@ parallelism is safe.
 Add to your `MODULE.bazel`:
 
 ```python
-bazel_dep(name = "rules_pg", version = "0.3.0")
+bazel_dep(name = "rules_pg", version = "0.4.0")
 
 pg = use_extension("@rules_pg//:extensions.bzl", "pg")
 
-# Declare which PostgreSQL versions your workspace needs.
-# At least one version is required.
-pg.version(versions = ["14"])
+# v0.4+: pg.version() fetches hermetic binaries from conda-forge —
+# no host PostgreSQL install required, no PATH munging needed.
+pg.version(versions = ["16"])   # default is "16"; 14/15 also supported
 
-# Bring the downloaded repositories into scope.
-use_repo(pg, "pg_14_linux_amd64", "pg_14_darwin_arm64", "pg_14_darwin_amd64")
+use_repo(pg, "pg_16_linux_amd64", "pg_16_darwin_arm64", "pg_16_darwin_amd64")
 ```
 
 To use multiple versions:
@@ -70,6 +69,22 @@ use_repo(pg,
     "pg_16_linux_amd64", "pg_16_darwin_arm64", "pg_16_darwin_amd64",
 )
 ```
+
+### `pg.version()` vs `pg.system()` (v0.4+)
+
+Two modes, can coexist per-version:
+
+- **`pg.version(versions = [...])`** — fetch hermetic binaries from conda-forge. No host postgres install required. Each version pulls the full transitive dependency closure (~15-25 conda packages: postgresql + libpq + libxml2 + openssl + readline + krb5 + libgcc + …) into one merged tree. RPATH-relative linkage handles the deps. Default mode in v0.4+.
+- **`pg.system(versions = [...])`** — reuse the host's existing PostgreSQL install. Useful when a consumer wants to pin to a specific patch version they control locally, or when running in an air-gapped CI without conda-forge access. Requires `pg_ctl` + `initdb` + `psql` + `pg_isready` discoverable via `$PATH` or `bin_dir`. (Pre-v0.4 this was the only mode.)
+
+You can mix the two — declare some versions hermetic, others system — by issuing both tags:
+
+```python
+pg.system(versions = ["14", "15"])   # share host's postgresql-14 + 15
+pg.version(versions = ["16"])         # auto-fetch hermetic 16
+```
+
+That's the pattern rules_pg's own `MODULE.bazel` uses for CI matrix coverage.
 
 ### Legacy WORKSPACE
 
@@ -96,7 +111,9 @@ rules_pg_register_toolchains(versions = ["14"])
 
 ### CI setup (GitHub Actions)
 
-`pg.system()` requires `pg_ctl` and friends on a discoverable path. On Ubuntu's GitHub runner the postgres binaries live under `/usr/lib/postgresql/<ver>/bin/`, not `/usr/bin/` (only thin wrappers for `psql` + `pg_isready` ship there). Add this step before `bazel build`:
+**v0.4+, hermetic (`pg.version`)**: no setup needed. `bazel build` works on the bare `ubuntu-latest` runner — the conda-forge closure is fetched and extracted at repo-rule time. Both `unzip` and `tar` (with `--zstd` support) are preinstalled on the runner.
+
+**`pg.system` mode**: requires `pg_ctl` and friends on a discoverable path. On Ubuntu's GitHub runner the postgres binaries live under `/usr/lib/postgresql/<ver>/bin/`, not `/usr/bin/` (only thin wrappers for `psql` + `pg_isready` ship there). Add this step before `bazel build`:
 
 ```yaml
 - name: Install PostgreSQL and put bin on PATH
@@ -107,7 +124,7 @@ rules_pg_register_toolchains(versions = ["14"])
     echo "$pg_bin" >> "$GITHUB_PATH"
 ```
 
-Without this, `pg.system()`'s repository-rule fetch fails with `could not locate pg_ctl` (the error message includes the same snippet inline, but consumers usually copy from the README first). A fully hermetic binary toolchain — `pg.version()` that downloads + verifies — is tracked for v0.4; for now `pg.system()` is the only mode.
+Without it, `pg.system()`'s repo rule fails with `could not locate pg_ctl` — the error message inlines the same snippet, but consumers usually copy from the README first.
 
 ---
 

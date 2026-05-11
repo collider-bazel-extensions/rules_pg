@@ -1,6 +1,6 @@
 module(
     name = "rules_pg",
-    version = "0.3.0",
+    version = "0.4.0",
 )
 
 bazel_dep(name = "bazel_skylib", version = "1.5.0")
@@ -14,14 +14,18 @@ bazel_dep(name = "rules_shell", version = "0.8.0")
 
 # Register the module extension that provides pg binaries.
 #
-# pg.system() uses the host-installed PostgreSQL instead of downloading
-# pre-built tarballs.  Switch back to pg.version() once real SHA-256
-# checksums are pinned in extensions.bzl and the CDN is reachable.
+# Two modes, can coexist (per-version):
+#   pg.system(versions = [...])  — reuse host-installed PostgreSQL
+#   pg.version(versions = [...]) — fetch hermetic binaries from
+#                                  conda-forge (v0.4+, full transitive
+#                                  closure ~15-25 packages per version)
+#
+# rules_pg's own MODULE.bazel exercises both:
+#   - 14 + 15 via system (legacy CI mode, validates back-compat)
+#   - 16 via hermetic (default for v0.4, no host postgres needed)
 pg = use_extension("//:extensions.bzl", "pg")
-pg.system(
-    versions = ["14", "15", "16"],
-    # bin_dir and lib_dir are auto-detected via pg_config / PATH if omitted.
-)
+pg.system(versions = ["14", "15"])
+pg.version(versions = ["16"])
 use_repo(pg, "pg_14_linux_amd64", "pg_14_darwin_arm64", "pg_14_darwin_amd64")
 use_repo(pg, "pg_15_linux_amd64", "pg_15_darwin_arm64", "pg_15_darwin_amd64")
 use_repo(pg, "pg_16_linux_amd64", "pg_16_darwin_arm64", "pg_16_darwin_amd64")
