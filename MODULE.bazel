@@ -20,12 +20,13 @@ bazel_dep(name = "rules_shell", version = "0.8.0")
 #                                  conda-forge (v0.4+, full transitive
 #                                  closure ~15-25 packages per version)
 #
-# rules_pg's own MODULE.bazel exercises both:
-#   - 14 + 15 via system (legacy CI mode, validates back-compat)
-#   - 16 via hermetic (default for v0.4, no host postgres needed)
+# rules_pg's own MODULE.bazel uses pg.version() for all three majors
+# so CI runs on a bare ubuntu-latest with no host postgres. Consumers
+# pick their own mode; the pg.system() path is exercised via the
+# in-tree pg.system tag-class plumbing tests, not via the test fixture
+# wiring.
 pg = use_extension("//:extensions.bzl", "pg")
-pg.system(versions = ["14", "15"])
-pg.version(versions = ["16"])
+pg.version(versions = ["14", "15", "16"])
 use_repo(pg, "pg_14_linux_amd64", "pg_14_darwin_arm64", "pg_14_darwin_amd64")
 use_repo(pg, "pg_15_linux_amd64", "pg_15_darwin_arm64", "pg_15_darwin_amd64")
 use_repo(pg, "pg_16_linux_amd64", "pg_16_darwin_arm64", "pg_16_darwin_amd64")

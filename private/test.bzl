@@ -124,7 +124,7 @@ def pg_test(
         srcs = None,
         deps = None,
         seed = None,
-        postgres_version = "14",
+        postgres_version = "16",
         database = "test",
         pg_user = "postgres",
         pg_password = "postgres",
@@ -151,7 +151,7 @@ def pg_test(
         srcs:             Test source files (forwarded to test_rule).
         deps:             Test dependencies (forwarded to test_rule).
         seed:             Optional label of a pg_seed_data target.
-        postgres_version: "14", "15", or "16". Default "14".
+        postgres_version: "14", "15", or "16". Default "16".
         database:         Database name created for the test. Default "test".
         pg_user:          Superuser name. Default "postgres".
         pg_password:      Superuser password. Default "postgres".

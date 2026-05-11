@@ -240,7 +240,25 @@ def _pg_setup(m: dict) -> _PgState:
 
     host = "127.0.0.1"
     port, reserved_sock = _allocate_port()
-    use_socket_fd = 14 <= actual_pg_version <= 17 and reserved_sock is not None
+    # `--socket-fd` is a Debian-postgresql-common patch (NOT in
+    # upstream postgres). Conda-forge's binaries — and any other
+    # upstream-source build — reject it with `unrecognized
+    # configuration parameter "socket_fd"`. Probe the binary's
+    # help text once to decide whether to use the patched flag.
+    postgres_bin = os.path.join(os.path.dirname(pg_ctl), "postgres")
+    socket_fd_supported = False
+    if 14 <= actual_pg_version <= 17 and os.path.exists(postgres_bin):
+        help_result = subprocess.run(
+            [postgres_bin, "--help"],
+            capture_output=True, text=True,
+            env=_pg_env(pg_lib_dir),
+        )
+        socket_fd_supported = "--socket-fd" in (help_result.stdout + help_result.stderr)
+    use_socket_fd = (
+        socket_fd_supported
+        and reserved_sock is not None
+        and os.environ.get("RULES_PG_DISABLE_SOCKET_FD") != "1"
+    )
 
     _log(f"Running initdb in {pgdata}")
     subprocess.run(
@@ -312,7 +330,11 @@ def _pg_setup(m: dict) -> _PgState:
                 sys.exit(1)
 
             port, reserved_sock = _allocate_port()
-            use_socket_fd = 14 <= actual_pg_version <= 17 and reserved_sock is not None
+            use_socket_fd = (
+                socket_fd_supported
+                and reserved_sock is not None
+                and os.environ.get("RULES_PG_DISABLE_SOCKET_FD") != "1"
+            )
             with open(conf_path, "a") as cf:
                 cf.write(f"port = {port}\n")
 

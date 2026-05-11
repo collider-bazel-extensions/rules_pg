@@ -9,10 +9,14 @@ on:
 
 jobs:
   # Hermetic mode (pg.version()) — runner has NO host postgres
-  # installed. Proves the conda-closure extraction works without
-  # any system pg_ctl / initdb / psql / etc. on PATH. This is the
-  # parity-with-local-dev scenario the v0.4 hermetic mode was built
-  # for.
+  # installed. Proves the conda-closure extraction + the toolchain
+  # binaries work without any system pg_ctl / initdb / psql / etc.
+  # on PATH. rules_pg's own MODULE.bazel uses pg.version() for all
+  # three majors (14/15/16) so the full test matrix runs hermetically.
+  #
+  # pg.system() is exercised by consumers who opt in via tag; the
+  # plumbing is unchanged from v0.3.0 and is consumer-tested
+  # implicitly.
   hermetic:
     name: bazel test (ubuntu-latest, hermetic pg.version)
     runs-on: ubuntu-latest
@@ -39,68 +43,13 @@ jobs:
           done
           echo "OK — no host postgres detected; hermetic mode test is meaningful"
 
-      # rules_pg's own MODULE.bazel uses pg.system() for 14/15 (which
-      # would require host postgres) + pg.version() for 16. Restrict
-      # the test set to pg16 + the version-agnostic tests; the
-      # pg14/pg15 system-mode tests stay green when run separately
-      # with host postgres available.
-      - name: bazel test (pg.version-backed targets)
-        run: |
-          bazel test \
-            //tests:pg16_smoke_test \
-            //tests:pg_server_test \
-            //tests:pg_health_check_test \
-            //tests:schema_smoke_test \
-            //tests:csv_seed_test \
-            //tests:custom_db_test \
-            //tests:pg_binary_test \
-            //tests:seed_smoke_test \
-            --test_output=errors
+      - name: bazel test //tests/...
+        run: bazel test //tests/... --test_output=errors
 
       - name: Upload test logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: bazel-testlogs-hermetic
-          path: bazel-testlogs/
-          if-no-files-found: ignore
-
-  # System mode (pg.system()) — also runs for back-compat. Installs
-  # postgres before bazel build (the workflow snippet rules_pg's
-  # README documents).
-  system:
-    name: bazel test (ubuntu-latest, system pg.system)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: bazel-contrib/setup-bazel@0.15.0
-        with:
-          bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-system
-          repository-cache: true
-
-      - name: Install host PostgreSQL and put bin on PATH
-        run: |
-          set -euo pipefail
-          sudo apt-get install -y postgresql
-          pg_bin=$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)
-          echo "$pg_bin" >> "$GITHUB_PATH"
-          "$pg_bin/pg_ctl" --version
-
-      # Restrict to the system-mode tests (14/15). pg16 is wired to
-      # the hermetic path in MODULE.bazel; running it here would
-      # double up but isn't a regression.
-      - name: bazel test (pg.system-backed targets)
-        run: |
-          bazel test \
-            //tests:pg14_smoke_test \
-            //tests:pg15_smoke_test \
-            --test_output=errors
-
-      - name: Upload test logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: bazel-testlogs-system
           path: bazel-testlogs/
           if-no-files-found: ignore

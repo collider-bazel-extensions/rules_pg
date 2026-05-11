@@ -37,10 +37,10 @@ load("//private:binary.bzl", "postgres_binary")
     for version in ["14", "15", "16"]
 ]
 
-# Alias for the default version (14).  postgres_schema points here when the
-# user doesn't set binary= explicitly.
+# Alias for the default version (v0.4+: 16). postgres_schema points
+# here when the user doesn't set binary= explicitly.
 alias(
     name = "pg_default",
-    actual = ":pg_14",
+    actual = ":pg_16",
     visibility = ["//visibility:public"],
 )
