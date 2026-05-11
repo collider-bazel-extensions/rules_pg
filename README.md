@@ -47,7 +47,7 @@ parallelism is safe.
 Add to your `MODULE.bazel`:
 
 ```python
-bazel_dep(name = "rules_pg", version = "0.2.0")
+bazel_dep(name = "rules_pg", version = "0.3.0")
 
 pg = use_extension("@rules_pg//:extensions.bzl", "pg")
 
@@ -91,6 +91,23 @@ rules_pg_dependencies(versions = ["14"])
 # Register toolchains so Bazel can resolve the right binary per platform.
 rules_pg_register_toolchains(versions = ["14"])
 ```
+
+---
+
+### CI setup (GitHub Actions)
+
+`pg.system()` requires `pg_ctl` and friends on a discoverable path. On Ubuntu's GitHub runner the postgres binaries live under `/usr/lib/postgresql/<ver>/bin/`, not `/usr/bin/` (only thin wrappers for `psql` + `pg_isready` ship there). Add this step before `bazel build`:
+
+```yaml
+- name: Install PostgreSQL and put bin on PATH
+  run: |
+    set -euo pipefail
+    sudo apt-get install -y postgresql
+    pg_bin=$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)
+    echo "$pg_bin" >> "$GITHUB_PATH"
+```
+
+Without this, `pg.system()`'s repository-rule fetch fails with `could not locate pg_ctl` (the error message includes the same snippet inline, but consumers usually copy from the README first). A fully hermetic binary toolchain — `pg.version()` that downloads + verifies — is tracked for v0.4; for now `pg.system()` is the only mode.
 
 ---
 

@@ -154,13 +154,35 @@ def _pg_system_binary_repo_impl(rctx):
 
     # Auto-detect bin_dir if not provided.
     if not bin_dir:
+        # First, $PATH (most local dev environments).
         res = rctx.execute(["sh", "-c", "command -v pg_ctl 2>/dev/null || true"])
         path = res.stdout.strip()
         if path:
             bin_dir = path.rsplit("/", 1)[0]
         else:
-            for candidate in ["/usr/bin", "/usr/local/bin", "/usr/local/pgsql/bin",
-                               "/opt/homebrew/bin", "/opt/local/bin"]:
+            # Then conventional install dirs. Order matters — `pg_ctl`
+            # is reachable but `initdb`/`postgres` may be too only on
+            # Debian/Ubuntu's /usr/lib/postgresql/<ver>/bin layout, NOT
+            # on /usr/bin (only psql + pg_isready ship there as thin
+            # wrappers). Probe the per-version dirs first to pick a
+            # bin/ that actually has the full server toolset.
+            res = rctx.execute(["sh", "-c",
+                "ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -1"])
+            ubuntu_bin = res.stdout.strip()
+            candidates = []
+            if ubuntu_bin:
+                candidates.append(ubuntu_bin)
+            candidates += [
+                "/usr/local/bin",
+                "/usr/local/pgsql/bin",
+                "/opt/homebrew/bin",     # macOS Homebrew (Apple Silicon)
+                "/opt/local/bin",        # macOS MacPorts
+                "/usr/pgsql-16/bin",     # PGDG RHEL/Fedora
+                "/usr/pgsql-15/bin",
+                "/usr/pgsql-14/bin",
+                "/usr/bin",              # last; usually only ships wrappers
+            ]
+            for candidate in candidates:
                 res = rctx.execute(["test", "-x", candidate + "/pg_ctl"])
                 if res.return_code == 0:
                     bin_dir = candidate
@@ -169,11 +191,42 @@ def _pg_system_binary_repo_impl(rctx):
     if not bin_dir:
         fail(
             "\nrules_pg: pg.system() — could not locate pg_ctl.\n" +
-            "Either install PostgreSQL (e.g. 'apt install postgresql-server-dev-all')\n" +
-            "or pass bin_dir = '/path/to/pg/bin' to pg.system().\n"
+            "\n" +
+            "rules_pg's `pg.system()` mode reuses an existing PostgreSQL\n" +
+            "install on the host. To resolve this in CI, install postgres\n" +
+            "before `bazel build`:\n" +
+            "\n" +
+            "  # GitHub Actions / Ubuntu runner:\n" +
+            "  - name: Install PostgreSQL and put bin on PATH\n" +
+            "    run: |\n" +
+            "      set -euo pipefail\n" +
+            "      sudo apt-get install -y postgresql\n" +
+            "      pg_bin=$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)\n" +
+            "      echo \"$pg_bin\" >> \"$GITHUB_PATH\"\n" +
+            "\n" +
+            "  # Local Ubuntu/Debian:\n" +
+            "    sudo apt-get install -y postgresql\n" +
+            "\n" +
+            "  # Local macOS (Homebrew):\n" +
+            "    brew install postgresql@16\n" +
+            "\n" +
+            "  # Local RHEL/Fedora (PGDG):\n" +
+            "    sudo dnf install -y postgresql-server\n" +
+            "\n" +
+            "Or pass an explicit bin_dir to pg.system() in MODULE.bazel:\n" +
+            "  pg.system(versions = [\"16\"], bin_dir = \"/usr/lib/postgresql/16/bin\")\n" +
+            "\n" +
+            "A fully hermetic binary toolchain is tracked at\n" +
+            "https://github.com/collider-bazel-extensions/rules_pg/issues\n" +
+            "(target: v0.4). For now `pg.system()` is the only mode.\n"
         )
 
-    # Verify required binaries exist and are executable.
+    # Verify required binaries exist and are executable. The common
+    # failure on Ubuntu is that the user's $PATH points at /usr/bin
+    # (which ships only psql + pg_isready as thin wrappers); the
+    # server binaries (initdb, pg_ctl) live in
+    # /usr/lib/postgresql/<ver>/bin/ and require either a PATH mod
+    # or an explicit bin_dir override.
     required = ["pg_ctl", "initdb", "psql", "pg_isready"]
     missing = []
     for b in required:
@@ -181,10 +234,24 @@ def _pg_system_binary_repo_impl(rctx):
         if res.return_code != 0:
             missing.append(bin_dir + "/" + b)
     if missing:
+        # If the bin_dir is /usr/bin, suggest /usr/lib/postgresql/<ver>/bin.
+        hint = ""
+        if bin_dir == "/usr/bin":
+            res = rctx.execute(["sh", "-c",
+                "ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -1"])
+            ubuntu_bin = res.stdout.strip()
+            if ubuntu_bin:
+                hint = (
+                    "\nHint: detected Ubuntu/Debian postgres at " + ubuntu_bin + " — pass\n" +
+                    "  pg.system(versions = [\"" + pg_version + "\"], bin_dir = \"" + ubuntu_bin + "\")\n" +
+                    "in MODULE.bazel, or add the dir to $PATH before `bazel build`:\n" +
+                    "  echo \"" + ubuntu_bin + "\" >> \"$GITHUB_PATH\"\n"
+                )
         fail(
             "\nrules_pg: pg.system() — required binaries missing or not executable:\n  " +
             "\n  ".join(missing) + "\n" +
-            "Ensure PostgreSQL is fully installed and binaries are in " + bin_dir + "\n"
+            "Ensure PostgreSQL is fully installed and binaries are in " + bin_dir + "\n" +
+            hint
         )
 
     # Auto-detect lib_dir if not provided.
