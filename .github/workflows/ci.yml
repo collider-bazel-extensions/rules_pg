@@ -12,7 +12,7 @@ jobs:
   # installed. Proves the conda-closure extraction + the toolchain
   # binaries work without any system pg_ctl / initdb / psql / etc.
   # on PATH. rules_pg's own MODULE.bazel uses pg.version() for all
-  # three majors (14/15/16) so the full test matrix runs hermetically.
+  # five majors (14-18) so the full test matrix runs hermetically.
   #
   # pg.system() is exercised by consumers who opt in via tag; the
   # plumbing is unchanged from v0.3.0 and is consumer-tested

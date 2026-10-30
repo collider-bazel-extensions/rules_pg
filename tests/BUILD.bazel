@@ -49,7 +49,7 @@ pg_test(
 )
 
 # ---------------------------------------------------------------------------
-# Tests: explicit PG versions (14, 15, 16)
+# Tests: explicit PG versions (14, 15, 16, 17, 18)
 # ---------------------------------------------------------------------------
 
 pg_test(
@@ -75,6 +75,26 @@ pg_test(
     srcs = ["schema_smoke_test.sh"],
     schema = ":test_schema",
     postgres_version = "16",
+    size = "medium",
+    tags = ["pg"],
+)
+
+pg_test(
+    name = "pg17_smoke_test",
+    srcs = ["schema_smoke_test.sh"],
+    schema = ":test_schema",
+    postgres_version = "17",
+    size = "medium",
+    tags = ["pg"],
+)
+
+# PG 18 removed `pg_ctl --socket-fd`; this exercises the launcher's
+# close-then-retry port path under the hermetic binaries.
+pg_test(
+    name = "pg18_smoke_test",
+    srcs = ["schema_smoke_test.sh"],
+    schema = ":test_schema",
+    postgres_version = "18",
     size = "medium",
     tags = ["pg"],
 )

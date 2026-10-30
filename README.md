@@ -6,7 +6,9 @@ test launcher. No system Postgres installation required. Full `--jobs`
 parallelism is safe.
 
 **Supported platforms:** Linux (x86\_64), macOS (arm64, x86\_64)  
-**Supported PostgreSQL versions:** 14, 15, 16
+**Supported PostgreSQL versions:** 14, 15, 16, 17, 18 (hermetic pins: 14.24,
+15.19, 16.15, 17.11, 18.6). PostgreSQL 14 reaches upstream end of life on
+2026-11-12; rules_pg will drop it in a later release.
 
 ---
 
@@ -47,13 +49,13 @@ parallelism is safe.
 Add to your `MODULE.bazel`:
 
 ```python
-bazel_dep(name = "rules_pg", version = "0.4.0")
+bazel_dep(name = "rules_pg", version = "0.5.0")
 
 pg = use_extension("@rules_pg//:extensions.bzl", "pg")
 
 # v0.4+: pg.version() fetches hermetic binaries from conda-forge —
 # no host PostgreSQL install required, no PATH munging needed.
-pg.version(versions = ["16"])   # default is "16"; 14/15 also supported
+pg.version(versions = ["16"])   # default is "16"; 14/15/17/18 also supported
 
 use_repo(pg, "pg_16_linux_amd64", "pg_16_darwin_arm64", "pg_16_darwin_amd64")
 ```
@@ -61,12 +63,12 @@ use_repo(pg, "pg_16_linux_amd64", "pg_16_darwin_arm64", "pg_16_darwin_amd64")
 To use multiple versions:
 
 ```python
-pg.version(versions = ["14", "15", "16"])
+pg.version(versions = ["16", "17", "18"])
 
 use_repo(pg,
-    "pg_14_linux_amd64", "pg_14_darwin_arm64", "pg_14_darwin_amd64",
-    "pg_15_linux_amd64", "pg_15_darwin_arm64", "pg_15_darwin_amd64",
     "pg_16_linux_amd64", "pg_16_darwin_arm64", "pg_16_darwin_amd64",
+    "pg_17_linux_amd64", "pg_17_darwin_arm64", "pg_17_darwin_amd64",
+    "pg_18_linux_amd64", "pg_18_darwin_arm64", "pg_18_darwin_amd64",
 )
 ```
 
@@ -84,7 +86,8 @@ pg.system(versions = ["14", "15"])   # share host's postgresql-14 + 15
 pg.version(versions = ["16"])         # auto-fetch hermetic 16
 ```
 
-That's the pattern rules_pg's own `MODULE.bazel` uses for CI matrix coverage.
+rules_pg's own `MODULE.bazel` uses `pg.version()` for all five majors, so CI
+runs the whole matrix hermetically.
 
 ### Legacy WORKSPACE
 
@@ -281,7 +284,7 @@ pg_test(
     srcs = [...],
     deps = [...],
     seed = None,
-    postgres_version = "14",
+    postgres_version = None,     # "14" … "18"; None = the schema's binary
     database = "test",
     pg_user = "postgres",
     pg_password = "postgres",
@@ -318,7 +321,7 @@ run).
 | `srcs` | `label_list` | `[]` | Test source files, forwarded to `test_rule`. |
 | `deps` | `label_list` | `[]` | Test dependencies, forwarded to `test_rule`. |
 | `seed` | `label` | `None` | Optional `pg_seed_data` target loaded after migrations. |
-| `postgres_version` | `string` | `"14"` | PostgreSQL major version: `"14"`, `"15"`, or `"16"`. |
+| `postgres_version` | `string` | `None` | PostgreSQL major version: `"14"` … `"18"`. Runs the test against `@rules_pg//:pg_<version>`. When unset, uses the schema's `binary` (`//:pg_default`, i.e. 16, unless the schema sets it). Before v0.5.0 this attribute was ignored and every test ran 16. |
 | `database` | `string` | `"test"` | Name of the database created for the test. |
 | `pg_user` | `string` | `"postgres"` | Database superuser name. |
 | `pg_password` | `string` | `"postgres"` | Database superuser password. |
@@ -365,9 +368,8 @@ load("@rules_pg//:defs.bzl", "pg_server")
 
 pg_server(
     name = "...",
-    schema = ":schema",
+    schema = ":schema",          # PostgreSQL version: the schema's `binary`
     seed = None,
-    postgres_version = "14",
     database = "test",
     pg_user = "postgres",
     pg_password = "postgres",
@@ -398,7 +400,6 @@ exit 0.
 | `name` | `string` | required | Target name. Also used as the env file stem: `$TEST_TMPDIR/<name>.env`. |
 | `schema` | `label` | required | `postgres_schema` target to apply on startup. |
 | `seed` | `label` | `None` | Optional `pg_seed_data` target loaded after migrations. |
-| `postgres_version` | `string` | `"14"` | PostgreSQL major version. |
 | `database` | `string` | `"test"` | Name of the database to create. |
 | `pg_user` | `string` | `"postgres"` | Database superuser name. |
 | `pg_password` | `string` | `"postgres"` | Database superuser password. |
@@ -456,8 +457,8 @@ directly — `postgres_schema` and `pg_test` resolve the binary automatically vi
 | `binary` | `label` | required | A `select()` expression resolving to the platform-appropriate binary repo. |
 | `version` | `string` | `"14"` | PostgreSQL major version string. Must match the version in the referenced binary repo. |
 
-The root `BUILD.bazel` of this repository pre-declares `pg_14`, `pg_15`, and
-`pg_16` targets using the correct `select()` expressions. Reference them
+The root `BUILD.bazel` of this repository pre-declares `pg_14` through `pg_18`
+targets using the correct `select()` expressions. Reference them
 directly rather than writing your own:
 
 ```python
@@ -822,12 +823,13 @@ pg_test(
 
 The `postgres_version` attribute on `pg_test` controls which pre-built binary
 is used. The version must have been declared in your `MODULE.bazel` (or fetched
-by `rules_pg_dependencies` in WORKSPACE).
+by `rules_pg_dependencies` in WORKSPACE). `pg_server` has no such attribute: it
+uses its schema's `binary` (see [postgres\_binary](#postgres_binary)).
 
 ```python
-# Default: PostgreSQL 14
+# Default: the schema's binary (PostgreSQL 16 unless the schema sets one)
 pg_test(
-    name = "test_pg14",
+    name = "test_default",
     schema = ":schema",
     srcs = ["my_test.sh"],
 )
@@ -853,7 +855,7 @@ per version and group them in a `test_suite`:
         postgres_version = version,
         tags = ["pg_compat"],
     )
-    for version in ["14", "15", "16"]
+    for version in ["14", "15", "16", "17", "18"]
 ]
 
 test_suite(

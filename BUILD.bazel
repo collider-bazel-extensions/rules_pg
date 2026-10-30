@@ -34,7 +34,7 @@ load("//private:binary.bzl", "postgres_binary")
         }),
         visibility = ["//visibility:public"],
     )
-    for version in ["14", "15", "16"]
+    for version in ["14", "15", "16", "17", "18"]
 ]
 
 # Alias for the default version (v0.4+: 16). postgres_schema points
