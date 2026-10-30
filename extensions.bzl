@@ -5,7 +5,7 @@ load("//tools:conda_versions.bzl", "CONDA_CLOSURES")
 _PLATFORMS = ["linux_amd64", "darwin_arm64", "darwin_amd64"]
 
 # Supported pg majors. Mirror the keys in CONDA_CLOSURES.
-_SUPPORTED_VERSIONS = ["14", "15", "16"]
+_SUPPORTED_VERSIONS = ["14", "15", "16", "17", "18"]
 
 # ---------------------------------------------------------------------------
 # BUILD template injected into each repo (downloaded or system)

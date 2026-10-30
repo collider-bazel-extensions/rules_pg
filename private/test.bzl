@@ -9,9 +9,16 @@ load("//private:seed.bzl", "PostgresSeedInfo")
 # Internal rule: builds the launcher + collects runfiles
 # ---------------------------------------------------------------------------
 
+# Majors with a `//:pg_<major>` target in the root BUILD.bazel.
+_SUPPORTED_VERSIONS = ["14", "15", "16", "17", "18"]
+
 def _pg_launcher_impl(ctx):
     schema_info = ctx.attr.schema[PostgresSchemaInfo]
-    binary_info = schema_info.binary
+    # pg_test's postgres_version sets `binary`; otherwise use the schema's.
+    if ctx.attr.binary:
+        binary_info = ctx.attr.binary[PostgresBinaryInfo]
+    else:
+        binary_info = schema_info.binary
 
     # Collect all files the launcher needs at runtime.
     pg_runfiles = binary_info.all_files
@@ -98,6 +105,11 @@ _pg_launcher_test = rule(
             mandatory = False,
             providers = [PostgresSeedInfo],
         ),
+        "binary": attr.label(
+            mandatory = False,
+            providers = [PostgresBinaryInfo],
+            doc = "Overrides the schema's binary. Set by pg_test's postgres_version.",
+        ),
         "test_binary": attr.label(
             mandatory = True,
             executable = True,
@@ -124,7 +136,7 @@ def pg_test(
         srcs = None,
         deps = None,
         seed = None,
-        postgres_version = "16",
+        postgres_version = None,
         database = "test",
         pg_user = "postgres",
         pg_password = "postgres",
@@ -151,7 +163,10 @@ def pg_test(
         srcs:             Test source files (forwarded to test_rule).
         deps:             Test dependencies (forwarded to test_rule).
         seed:             Optional label of a pg_seed_data target.
-        postgres_version: "14", "15", or "16". Default "16".
+        postgres_version: "14", "15", "16", "17", or "18". Runs the test
+                          against `@rules_pg//:pg_<version>`. Default None:
+                          use the schema's `binary` (`//:pg_default`, 16,
+                          unless the schema sets it).
         database:         Database name created for the test. Default "test".
         pg_user:          Superuser name. Default "postgres".
         pg_password:      Superuser password. Default "postgres".
@@ -163,6 +178,10 @@ def pg_test(
                           py_test, cc_test, etc.
         **kwargs:         Remaining kwargs forwarded to test_rule.
     """
+
+    if postgres_version != None and postgres_version not in _SUPPORTED_VERSIONS:
+        fail("pg_test {}: postgres_version must be one of {}, got {}".format(
+            name, ", ".join(_SUPPORTED_VERSIONS), repr(postgres_version)))
 
     srcs  = srcs  or []
     deps  = deps  or []
@@ -188,6 +207,7 @@ def pg_test(
         name    = name,
         schema  = schema,
         seed    = seed,
+        binary  = Label("//:pg_" + postgres_version) if postgres_version else None,
         test_binary = ":" + inner_name,
         database    = database,
         pg_user     = pg_user,

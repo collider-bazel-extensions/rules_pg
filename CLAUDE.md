@@ -131,7 +131,7 @@ pg_test(
     srcs = ["my_test.go"],
     schema = ":my_schema",          # required
     seed = ":my_seed",              # optional
-    postgres_version = "16",        # optional, default "14"
+    postgres_version = "16",        # optional; "14"…"18". Default: the schema's binary (16)
     database = "testdb",            # optional, default "test"
     pg_user = "postgres",           # optional
     pg_password = "postgres",       # optional
@@ -331,9 +331,11 @@ All tests must pass before any commit with code changes.
 
 All documentation (`README.md`, `DESIGN.md`, `CLAUDE.md`) must be updated to reflect any code changes before committing. This includes new rules, changed attributes, new public API surface, and behaviour changes.
 
-### Test results (last full run: 2026-04-18)
+### Test results (last full run: 2026-10-30)
 
-All 10 tests pass on Linux x86_64 with PostgreSQL 18.3 system install.
+All 12 tests pass on Linux x86_64 with the hermetic conda-forge binaries
+(`pg.version()`; 14.24, 15.19, 16.15, 17.11, 18.6). Each `pg<N>_smoke_test`
+checks `server_version_num` against the major in its target name.
 
 | Test target                    | What it verifies                                                        | Result |
 |--------------------------------|-------------------------------------------------------------------------|--------|
@@ -342,6 +344,8 @@ All 10 tests pass on Linux x86_64 with PostgreSQL 18.3 system install.
 | `//tests:pg14_smoke_test`      | pg_test macro with `postgres_version = "14"`                            | PASSED |
 | `//tests:pg15_smoke_test`      | pg_test macro with `postgres_version = "15"`                            | PASSED |
 | `//tests:pg16_smoke_test`      | pg_test macro with `postgres_version = "16"`                            | PASSED |
+| `//tests:pg17_smoke_test`      | pg_test macro with `postgres_version = "17"`                            | PASSED |
+| `//tests:pg18_smoke_test`      | pg_test macro with `postgres_version = "18"` (no `--socket-fd` path)    | PASSED |
 | `//tests:pg_binary_test`       | PG binary present, version ≥ 14, DDL/DML, ROLLBACK                     | PASSED |
 | `//tests:csv_seed_test`        | CSV seed loading via `\copy`; exact row counts                          | PASSED |
 | `//tests:custom_db_test`       | Custom `database =` and `pg_user =` attributes                          | PASSED |
@@ -405,9 +409,14 @@ All test shell scripts must:
   suites, consider a shared-server mode (not yet implemented).
 - Schema migration ordering relies on the caller listing files explicitly or
   using `glob()` with numeric prefixes. There is no automatic dependency solver.
-- Downloaded tarball SHA-256 checksums in `extensions.bzl`/`repositories.bzl`
-  are placeholder values. Run `tools/update_checksums.sh` (not yet implemented)
-  to pin real values before enabling `pg.version()`.
+- **PostgreSQL 14 reaches upstream end of life on 2026-11-12.** It is still
+  offered (14.24) but should be dropped in a later release.
+- **Legacy WORKSPACE downloads are broken on Linux.** `repositories.bzl` and
+  `tools/update_checksums.sh` still point at EnterpriseDB tarballs (14.11 /
+  15.6 / 16.2); the Linux one returns 403. Bzlmod's `pg.version()` (conda-forge)
+  is unaffected. WORKSPACE has no 17/18 entries.
+- The launcher doesn't put the hermetic `bin/` on the test's `PATH`, so tests
+  that call `psql` use the host's client (any version can talk to the server).
 - `pg_server` target names must be unique within a test run. Two `pg_server`
   targets with the same local name in different packages would write to the same
   `$TEST_TMPDIR/<name>.env` path.

@@ -57,4 +57,17 @@ if [[ "$idx_count" != "1" ]]; then
 fi
 echo "OK: index posts_user_id_idx exists"
 
+# For the per-version targets (//tests:pg<major>_smoke_test), check the
+# server really is that major: pg_test's postgres_version was once ignored
+# and every version ran PostgreSQL 16.
+if [[ "${TEST_TARGET:-}" =~ :pg([0-9]+)_smoke_test$ ]]; then
+    want="${BASH_REMATCH[1]}"
+    got=$(( $(psql -c "SHOW server_version_num;") / 10000 ))
+    if [[ "$got" != "$want" ]]; then
+        echo "FAIL: expected PostgreSQL $want, server is $got" >&2
+        exit 1
+    fi
+    echo "OK: server is PostgreSQL $got ($(psql -c 'SHOW server_version;'))"
+fi
+
 echo "--- PASS ---"
