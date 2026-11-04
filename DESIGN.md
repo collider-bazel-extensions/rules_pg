@@ -53,6 +53,15 @@ MODULE.bazel / WORKSPACE
                                    SIGTERM → stop
 ```
 
+**Arguments and environment.** `<name>_inner` only ever runs as the
+launcher's `os.execve` target, so Bazel never applies attributes set on it
+at run time. `pg_test` therefore puts `args`, `env` and `env_inherit` on the
+outer `<name>` test, which Bazel does run. The launcher passes its argv and
+environment on to the test binary, with `PG*` set on top. `data` goes on
+both targets, so `$(location)` / `$(rootpath)` / `$(rlocationpath)` in
+`args` and `env` expand on the outer one. Before v0.5.1 these were forwarded
+to the inner target and silently dropped (#5).
+
 ---
 
 ## Provider chain

@@ -49,7 +49,7 @@ parallelism is safe.
 Add to your `MODULE.bazel`:
 
 ```python
-bazel_dep(name = "rules_pg", version = "0.5.0")
+bazel_dep(name = "rules_pg", version = "0.5.1")
 
 pg = use_extension("@rules_pg//:extensions.bzl", "pg")
 
@@ -329,6 +329,10 @@ run).
 | `timeout` | `string` | `None` | Bazel test timeout override. |
 | `tags` | `string_list` | `[]` | Additional Bazel tags. |
 | `test_rule` | `rule` | `native.sh_test` | The `*_test` rule used for the inner binary. Pass `go_test`, `py_test`, `cc_test`, etc. |
+| `args` | `list` | `[]` | Arguments for the test binary, after the database is up. `$(location)`, `$(rootpath)` and `$(rlocationpath)` work on labels in `data`. Before v0.5.1 these never reached the test. |
+| `env` | `dict` | `{}` | Environment for the test binary, with the same expansion. `PG*` are set by the launcher and take precedence. |
+| `env_inherit` | `list` | `[]` | Variables passed through from the environment `bazel test` runs in. |
+| `data` | `label_list` | `[]` | Runtime files, available to the test and to `args` / `env` expansion. |
 | `**kwargs` | | | All remaining attributes are forwarded to `test_rule`. |
 
 **Minimal example:**
@@ -713,7 +717,20 @@ dependency first.
 ## Using `pg_test` with Go, Python, or C++
 
 Pass the language-specific test rule via `test_rule`. All remaining attributes
-are forwarded to that rule.
+are forwarded to that rule, except `args`, `env` and `env_inherit`. Those are set
+on the outer test that starts PostgreSQL, which passes them on to your test
+binary; `data` goes to both. So a Go test can take a path argument:
+
+```python
+pg_test(
+    name = "compat_test",
+    schema = ":schema",
+    test_rule = go_test,
+    srcs = ["compat_test.go"],
+    data = [":frozen_queries"],
+    args = ["-src=$(rlocationpath :frozen_queries)"],
+)
+```
 
 **Go** (using `rules_go`):
 

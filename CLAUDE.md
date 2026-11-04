@@ -331,15 +331,16 @@ All tests must pass before any commit with code changes.
 
 All documentation (`README.md`, `DESIGN.md`, `CLAUDE.md`) must be updated to reflect any code changes before committing. This includes new rules, changed attributes, new public API surface, and behaviour changes.
 
-### Test results (last full run: 2026-10-30)
+### Test results (last full run: 2026-11-04)
 
-All 12 tests pass on Linux x86_64 with the hermetic conda-forge binaries
+All 13 tests pass on Linux x86_64 with the hermetic conda-forge binaries
 (`pg.version()`; 14.24, 15.19, 16.15, 17.11, 18.6). Each `pg<N>_smoke_test`
 checks `server_version_num` against the major in its target name.
 
 | Test target                    | What it verifies                                                        | Result |
 |--------------------------------|-------------------------------------------------------------------------|--------|
 | `//tests:schema_smoke_test`    | Schema migrations applied; DDL/DML round-trip                           | PASSED |
+| `//tests:args_test`            | `args` / `env` reach the test, with `$(rootpath)` / `$(rlocationpath)` expanded | PASSED |
 | `//tests:seed_smoke_test`      | SQL seed data loaded; referential integrity join                        | PASSED |
 | `//tests:pg14_smoke_test`      | pg_test macro with `postgres_version = "14"`                            | PASSED |
 | `//tests:pg15_smoke_test`      | pg_test macro with `postgres_version = "15"`                            | PASSED |
