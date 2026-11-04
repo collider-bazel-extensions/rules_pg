@@ -48,6 +48,26 @@ pg_test(
     tags = ["pg"],
 )
 
+# args / env reach the wrapped test, with location expansion (#5).
+pg_test(
+    name = "args_test",
+    srcs = ["args_test.sh"],
+    schema = ":test_schema",
+    args = [
+        "one",
+        "'two words'",
+        "$(rootpath args/fixture.txt)",
+        "$(rlocationpath args/fixture.txt)",
+    ],
+    data = ["args/fixture.txt"],
+    env = {
+        "PG_ARGS_FILE": "$(rootpath args/fixture.txt)",
+        "PG_ARGS_PLAIN": "plain",
+    },
+    size = "medium",
+    tags = ["pg"],
+)
+
 # ---------------------------------------------------------------------------
 # Tests: explicit PG versions (14, 15, 16, 17, 18)
 # ---------------------------------------------------------------------------

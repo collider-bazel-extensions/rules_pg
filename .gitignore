@@ -2,3 +2,4 @@ bazel-*
 .DS_Store
 MODULE.bazel.lock
 kubectl
+__pycache__/

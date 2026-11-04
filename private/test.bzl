@@ -81,14 +81,24 @@ exec "$RUNFILES_ROOT/{workspace}/{launcher}" "$@"
     )
 
     runfiles = ctx.runfiles(
-        files = [manifest, launcher_src, wrapper],
+        files = [manifest, launcher_src, wrapper] + ctx.files.data,
         transitive_files = depset(transitive = [pg_runfiles, migration_files, seed_files]),
     ).merge(ctx.attr.test_binary.default_runfiles)
+    for d in ctx.attr.data:
+        runfiles = runfiles.merge(d[DefaultInfo].default_runfiles)
 
+    env = {
+        k: ctx.expand_location(v, ctx.attr.data)
+        for k, v in ctx.attr.env.items()
+    }
     return [
         DefaultInfo(
             executable = wrapper,
             runfiles   = runfiles,
+        ),
+        RunEnvironmentInfo(
+            environment = env,
+            inherited_environment = ctx.attr.env_inherit,
         ),
     ]
 
@@ -119,6 +129,15 @@ _pg_launcher_test = rule(
             default = Label("//private:launcher.py"),
             allow_single_file = True,
             executable = False,
+        ),
+        # On this (outer) rule as well as the inner test, so `args` and
+        # `env` can use $(location) / $(rootpath) / $(rlocationpath).
+        "data": attr.label_list(allow_files = True),
+        "env": attr.string_dict(
+            doc = "Environment for the test binary ($(location) etc. expanded against data).",
+        ),
+        "env_inherit": attr.string_list(
+            doc = "Variables passed through from the environment `bazel test` runs in.",
         ),
         "database":    attr.string(default = "test"),
         "pg_user":     attr.string(default = "postgres"),
@@ -176,7 +195,13 @@ def pg_test(
         test_rule:        The *_test rule to use for the inner test binary.
                           Defaults to native.sh_test.  Pass e.g. go_test,
                           py_test, cc_test, etc.
-        **kwargs:         Remaining kwargs forwarded to test_rule.
+        **kwargs:         Remaining kwargs forwarded to test_rule, except:
+                          `args`, `env` and `env_inherit` go to the outer
+                          test, which runs the wrapper. The launcher passes
+                          its arguments and environment on to the test
+                          binary, so they reach it with $(location) /
+                          $(rootpath) / $(rlocationpath) expanded, after
+                          PG* are set. `data` goes to both.
     """
 
     if postgres_version != None and postgres_version not in _SUPPORTED_VERSIONS:
@@ -192,12 +217,21 @@ def pg_test(
     # don't want rules_shell as a transitive dep.
     _test_rule = test_rule or sh_test
 
+    # The inner test only runs as the wrapper's binary, so Bazel would never
+    # apply its args / env: they belong on the outer test (#5).
+    outer = {}
+    for key in ("args", "env", "env_inherit"):
+        if key in kwargs:
+            outer[key] = kwargs.pop(key)
+    data = kwargs.pop("data", None) or []
+
     # 1. Build the inner test binary (no pg awareness).
     inner_name = name + "_inner"
     _test_rule(
         name = inner_name,
         srcs = srcs,
         deps = deps,
+        data = data,
         tags = tags + ["manual"],  # not run directly
         **kwargs
     )
@@ -212,7 +246,9 @@ def pg_test(
         database    = database,
         pg_user     = pg_user,
         pg_password = pg_password,
+        data    = data,
         size    = size,
         timeout = timeout,
         tags    = tags,
+        **outer
     )
