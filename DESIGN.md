@@ -230,8 +230,25 @@ _pg_setup(manifest) → state
   ↓
 atexit.register(_stop_cluster, state)   ← best-effort; does not fire after execve
   ↓
-os.execve(test_binary, env={PGHOST, PGPORT, …})
+os.execve(test_binary, env={PGHOST, PGPORT, …, PG_BIN, PATH=$PG_BIN:$PATH})
 ```
+
+The test's environment is the caller's, plus the `PG*` variables, plus
+`PG_BIN`: the runfiles `bin/` of the selected binary, prepended to `PATH`
+(rules_pg#7). So a script's `psql` / `pg_dump` / `createdb` is the bundled one,
+at the test's version. Before v0.5.2 only the lib dir was added, to
+`LD_LIBRARY_PATH`, so a test ran the host's `psql` against the bundled libpq,
+and a host psql 18 crashed on a libpq 16. The lib dir is no longer added to the
+test's library path:
+
+- the conda binaries resolve their libraries through `RPATH=$ORIGIN/../lib`;
+- on the path, every host program the test runs would load them.
+
+The launcher's own `initdb` / `pg_ctl` / `psql` calls still get it, which
+`pg.system()` installs may need. `PostgresBinaryInfo.all_files` holds every
+`bin/` file (not only the five the launcher calls), so `PG_BIN` holds every
+client. `pg.system()` links the server tools and the common clients the host
+install has.
 
 Cleanup relies on Bazel removing `$TEST_TMPDIR` after each test run. The atexit
 handler is registered but does not fire after `os.execve` because the Python

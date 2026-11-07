@@ -405,7 +405,15 @@ def main_test(m: dict) -> None:
     if not os.path.isabs(test_binary):
         test_binary = _find_runfile(test_binary, workspace)
 
-    env = _pg_env(state.pg_lib_dir)
+    # The bundled bin/ first on PATH, so `psql` & co. are the test's
+    # version, never a host client (rules_pg#7). No bundled lib dir on the
+    # library path: the bundled binaries find their libraries through
+    # their RPATH, and on the path it would be loaded by every host program
+    # the test runs (a host psql 18 crashes on a bundled libpq 16).
+    env = os.environ.copy()
+    pg_bin = os.path.dirname(os.path.abspath(state.psql))
+    env["PG_BIN"]     = pg_bin
+    env["PATH"]       = pg_bin + (":" + env["PATH"] if env.get("PATH") else "")
     env["PGHOST"]     = state.host
     env["PGPORT"]     = str(state.port)
     env["PGDATABASE"] = state.database
@@ -440,6 +448,8 @@ def main_server(m: dict) -> None:
         f.write(f"PGDATABASE={state.database}\n")
         f.write(f"PGUSER={state.pg_user}\n")
         f.write(f"PGPASSWORD={state.pg_password}\n")
+        # The bundled clients (psql, pg_dump, createdb, ...) for consumers.
+        f.write(f"PG_BIN={os.path.dirname(os.path.abspath(state.psql))}\n")
     os.replace(tmp, output_env_file)
     _log(f"Connection details written to {output_env_file}")
 

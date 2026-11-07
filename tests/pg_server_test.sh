@@ -3,7 +3,7 @@
 #
 # Verifies pg_server lifecycle:
 #   - starts an ephemeral cluster and writes the env file
-#   - env file contains all required PG* variables
+#   - env file contains all required PG* variables, and PG_BIN (the bundled clients)
 #   - database is reachable and schema + seed were applied
 #   - SIGTERM causes a clean (exit 0) shutdown
 #
@@ -46,7 +46,7 @@ echo "OK: env file appeared"
 
 # Verify env file has all required variables.
 source "$ENV_FILE"
-for var in PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD; do
+for var in PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD PG_BIN; do
     if [[ -z "${!var:-}" ]]; then
         echo "FAIL: $var is missing from env file" >&2
         exit 1
@@ -56,7 +56,7 @@ done
 
 # Verify the database accepts connections.
 psql_run() {
-    PGPASSWORD="$PGPASSWORD" command psql \
+    PGPASSWORD="$PGPASSWORD" "$PG_BIN/psql" \
         -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
         --no-password -v ON_ERROR_STOP=1 -t -A "$@"
 }

@@ -273,7 +273,12 @@ def _pg_system_binary_repo_impl(rctx):
     # Create the same bin/ + lib/ directory structure as a downloaded tarball.
     rctx.execute(["mkdir", "-p", "bin", "lib"])
 
-    for b in ["pg_ctl", "initdb", "psql", "pg_isready", "pg_dump", "postgres"]:
+    # The server tools, and the client tools a test may run from PG_BIN
+    # (the ones this install has).
+    for b in ["pg_ctl", "initdb", "psql", "pg_isready", "pg_dump", "postgres",
+              "pg_dumpall", "pg_restore", "createdb", "dropdb", "createuser",
+              "dropuser", "vacuumdb", "reindexdb", "clusterdb", "pg_basebackup",
+              "pgbench"]:
         src = bin_dir + "/" + b
         result = rctx.execute(["test", "-f", src])
         if result.return_code == 0:

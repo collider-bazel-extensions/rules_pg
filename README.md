@@ -49,7 +49,7 @@ parallelism is safe.
 Add to your `MODULE.bazel`:
 
 ```python
-bazel_dep(name = "rules_pg", version = "0.5.1")
+bazel_dep(name = "rules_pg", version = "0.5.2")
 
 pg = use_extension("@rules_pg//:extensions.bzl", "pg")
 
@@ -166,7 +166,7 @@ pg_test(
 
 ```bash
 #!/usr/bin/env bash
-# db_test.sh
+# db_test.sh — psql is the bundled one, at the test's PostgreSQL version
 psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
      -c "SELECT COUNT(*) FROM users;"
 ```
@@ -585,7 +585,11 @@ PGPORT=54321
 PGDATABASE=test
 PGUSER=postgres
 PGPASSWORD=postgres
+PG_BIN=/…/runfiles/+pg+pg_16_linux_amd64/bin
 ```
+
+`PG_BIN` (v0.5.2+) holds the bundled clients (`psql`, `pg_dump`, `createdb`, …)
+at the server's version; use `"$PG_BIN/psql"` rather than a host `psql`.
 
 Any client that respects `libpq` environment variables — `psql`, `pgx`,
 `psycopg2`, `database/sql` with a `pgx` driver — connects without any
@@ -637,10 +641,22 @@ The launcher sets these variables in the test process environment:
 | `PGDATABASE` | `test` | Name of the created database |
 | `PGUSER` | `postgres` | Database superuser |
 | `PGPASSWORD` | `postgres` | Database superuser password |
+| `PG_BIN` | `…/runfiles/+pg+pg_16_linux_amd64/bin` | The bundled PostgreSQL `bin/`, also first on `PATH` |
 
 These are the standard `libpq` environment variables, so any client that
 respects them — `psql`, `pgx`, `psycopg2`, `libpq`, `database/sql` with a
 `pgx` or `pq` driver — will connect without any additional configuration.
+
+**The clients are the bundled ones (v0.5.2+).** `PG_BIN` is first on the
+test's `PATH`, so `psql`, `pg_dump`, `pg_restore`, `createdb`, `pg_isready` and
+the rest are the test's PostgreSQL version, never a host install. (Before
+v0.5.2 a test ran the host's `psql` with the bundled libpq on
+`LD_LIBRARY_PATH`. On GitHub's runners, psql 18 against libpq 16 crashed with
+`undefined symbol: PQsendPipelineSync` (rules_pg#7).) The bundled library
+directory is no longer put on the test's library path: the bundled binaries
+find their libraries through their RPATH, and other host programs the test
+runs keep their own. With `pg.system()`, `PG_BIN` holds links to the host
+install's server and client tools.
 
 ---
 
@@ -968,9 +984,11 @@ register_toolchains("//my_toolchains:my_pg_toolchain_registered")
 
 **Q: Can I run `pg_test` targets on CI without a system Postgres installation?**
 
-Yes. All required binaries — `pg_ctl`, `initdb`, `psql`, `pg_isready` — are
-downloaded as part of the Bazel fetch phase and are available as runfiles.
-Nothing from the host system's `PATH` is used.
+Yes. All required binaries — `pg_ctl`, `initdb`, `psql`, `pg_isready` and the
+other clients — are downloaded as part of the Bazel fetch phase and are
+available as runfiles. A `pg_test`'s `PATH` starts with them (`PG_BIN`), so a
+script's `psql` is the bundled one, never a host install (since v0.5.2;
+rules_pg#7).
 
 ---
 
