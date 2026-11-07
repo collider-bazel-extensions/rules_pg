@@ -44,7 +44,7 @@ PostgresBinaryInfo
 Every `pg_test` target gets:
 - Its own `initdb`'d cluster under `$TEST_TMPDIR/pgdata`
 - A randomly assigned free TCP port (TOCTOU-safe on PG 14–17; retried on PG 18+)
-- Env vars injected: `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`
+- Env vars injected: `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, and `PG_BIN` (the bundled `bin/` in the runfiles), prepended to `PATH`, so `psql` & co. are the bundled clients, never the host's (#7). The bundled lib dir is not put on the test's library path (the binaries use their RPATH).
 
 No shared state between tests → full `--jobs` parallelism is safe.
 
@@ -168,6 +168,7 @@ PGPORT=54321
 PGDATABASE=testdb
 PGUSER=postgres
 PGPASSWORD=postgres
+PG_BIN=/…/runfiles/+pg+pg_16_linux_amd64/bin
 ```
 
 Tests that depend on the server source this file:
@@ -331,9 +332,9 @@ All tests must pass before any commit with code changes.
 
 All documentation (`README.md`, `DESIGN.md`, `CLAUDE.md`) must be updated to reflect any code changes before committing. This includes new rules, changed attributes, new public API surface, and behaviour changes.
 
-### Test results (last full run: 2026-11-04)
+### Test results (last full run: 2026-11-07)
 
-All 13 tests pass on Linux x86_64 with the hermetic conda-forge binaries
+All 16 tests pass on Linux x86_64 with the hermetic conda-forge binaries
 (`pg.version()`; 14.24, 15.19, 16.15, 17.11, 18.6). Each `pg<N>_smoke_test`
 checks `server_version_num` against the major in its target name.
 
@@ -350,7 +351,8 @@ checks `server_version_num` against the major in its target name.
 | `//tests:pg_binary_test`       | PG binary present, version ≥ 14, DDL/DML, ROLLBACK                     | PASSED |
 | `//tests:csv_seed_test`        | CSV seed loading via `\copy`; exact row counts                          | PASSED |
 | `//tests:custom_db_test`       | Custom `database =` and `pg_user =` attributes                          | PASSED |
-| `//tests:pg_server_test`       | pg_server start, env file, schema+seed, SIGTERM clean shutdown          | PASSED |
+| `//tests:bundled_bin_{16,17,18}_test` | psql, pg_dump, pg_isready, createdb, dropdb, pg_restore resolve to `$PG_BIN` in the runfiles at the test's version; createdb works; bundled lib dir not on the library path (#7) | PASSED |
+| `//tests:pg_server_test`       | pg_server start, env file (PG* and PG_BIN), schema+seed via `$PG_BIN/psql`, SIGTERM clean shutdown | PASSED |
 | `//tests:pg_health_check_test` | pg_health_check exits non-zero without env file, 0 when file is present | PASSED |
 
 ### Adding a new Postgres version
@@ -385,8 +387,8 @@ Both modes share `_pg_setup`, which:
 10. Creates the test database, applies migrations in order, loads seed data.
 11. Returns a `_PgState` dataclass with connection details.
 
-After `_pg_setup`, test mode calls `os.execve` with `PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD`
-set; server mode writes `$TEST_TMPDIR/<name>.env` and blocks.
+After `_pg_setup`, test mode calls `os.execve` with `PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD`,
+`PG_BIN` and `PATH=$PG_BIN:$PATH` set (no bundled lib dir on the library path); server mode writes `$TEST_TMPDIR/<name>.env` and blocks.
 
 ### Test script requirements
 

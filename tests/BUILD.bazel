@@ -213,3 +213,15 @@ sh_test(
     size = "small",
     tags = ["pg"],
 )
+
+# The bundled clients are on the test's PATH, at the test's version
+# (rules_pg#7). On a host with its own psql, the old behaviour fails this.
+[pg_test(
+    name = "bundled_bin_{}_test".format(v),
+    srcs = ["bundled_bin_test.sh"],
+    args = [v],
+    postgres_version = v,
+    schema = ":test_schema",
+    size = "medium",
+    tags = ["pg"],
+) for v in ["16", "17", "18"]]

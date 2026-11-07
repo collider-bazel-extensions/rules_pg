@@ -14,7 +14,8 @@ PostgresBinaryInfo = provider(
         "pg_dump":    "File: pg_dump binary",
         "version":    "string: major version, e.g. '16'",
         "lib_dir":    "File: lib/ directory (needed for shared libraries on Linux)",
-        "all_files":  "depset: all files required at runtime",
+        "all_files":  "depset: every bin/ file and the libraries (a test's " +
+                      "PG_BIN is the runfiles bin/ directory, so all clients are there)",
     },
 )
 
@@ -39,10 +40,10 @@ def _postgres_binary_files_impl(ctx):
     pg_isready  = _require("pg_isready")
     pg_dump     = _require("pg_dump")
 
+    # Every bin/ file, not just the five above: a pg_test's PATH starts
+    # with this bin/ directory in its runfiles (rules_pg#7).
     lib_files = ctx.files.libs
-    all_files = depset(
-        [pg_ctl, initdb, psql, pg_isready, pg_dump] + lib_files,
-    )
+    all_files = depset(ctx.files.bins + lib_files)
 
     return [
         DefaultInfo(files = all_files),
