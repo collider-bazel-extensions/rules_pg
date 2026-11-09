@@ -1,4 +1,5 @@
 load("//private:binary.bzl", "postgres_binary")
+load("//private:tool.bzl", "postgres_tool")
 
 # ---------------------------------------------------------------------------
 # Platform config_settings used by postgres_binary select()s below.
@@ -44,3 +45,19 @@ alias(
     actual = ":pg_16",
     visibility = ["//visibility:public"],
 )
+
+# ---------------------------------------------------------------------------
+# Runnable clients per version (rules_pg#9): `bazel run @rules_pg//:psql_16
+# -- ...` runs the bundled psql 16 from the caller's directory.
+# ---------------------------------------------------------------------------
+
+[
+    postgres_tool(
+        name = "{}_{}".format(tool, version),
+        binary = ":pg_" + version,
+        tool = tool,
+        visibility = ["//visibility:public"],
+    )
+    for version in ["14", "15", "16", "17", "18"]
+    for tool in ["psql", "pg_dump", "pg_restore", "pg_dumpall", "pg_isready"]
+]

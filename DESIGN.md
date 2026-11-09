@@ -113,6 +113,29 @@ Both modes produce a repo named `pg_<version>_<platform>` (e.g.,
 `select()` keyed on platform constraints — no other rule needs to know which
 mode was used.
 
+### Runnable clients (`postgres_tool`, v0.6.0)
+
+The root package declares `psql_<v>`, `pg_dump_<v>`, `pg_restore_<v>`,
+`pg_dumpall_<v>` and `pg_isready_<v>` for each version, each a
+`postgres_tool` (`private/tool.bzl`) over `:pg_<v>` (#9). The rule picks the
+named file from the binary's `bin/` and writes a small bash wrapper as the
+executable:
+
+- It locates its runfiles through `$0.runfiles` (`bazel run`) or
+  `RUNFILES_DIR` (when it is another target's `data`), and runs the client by
+  its runfiles path.
+- It `cd`s to `$BUILD_WORKING_DIRECTORY` first, so relative paths in the
+  arguments (`pg_dump -f ./dump.sql`) mean the caller's directory rather than
+  the runfiles tree. A plain symlink as the executable could not do this.
+- Its runfiles are the whole install (`PostgresBinaryInfo.all_files`): the
+  conda binaries find libpq through RPATH `$ORIGIN/../lib`, so no
+  `LD_LIBRARY_PATH` is set (setting one is what #7 removed from `pg_test`).
+- With `pg.system()` the repo links only the clients the host has; a missing
+  one fails at analysis and lists the ones that are there.
+
+There is no unversioned alias: the point of these targets is a pinned major
+version.
+
 ---
 
 ## `pg_test` macro
