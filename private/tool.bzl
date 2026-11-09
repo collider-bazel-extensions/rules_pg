@@ -9,6 +9,7 @@ set -euo pipefail
 if [[ -d "$0.runfiles" ]]; then r="$0.runfiles"
 elif [[ -n "${{RUNFILES_DIR:-}}" ]]; then r="$RUNFILES_DIR"
 else echo "{label}: cannot find runfiles" >&2; exit 1; fi
+r="$(cd "$r" && pwd)"
 bin="$r/{rlocation}"
 if [[ -n "${{BUILD_WORKING_DIRECTORY:-}}" ]]; then cd "$BUILD_WORKING_DIRECTORY"; fi
 exec "$bin" "$@"

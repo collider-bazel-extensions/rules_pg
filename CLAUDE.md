@@ -361,7 +361,7 @@ checks `server_version_num` against the major in its target name.
 | `//tests:csv_seed_test`        | CSV seed loading via `\copy`; exact row counts                          | PASSED |
 | `//tests:custom_db_test`       | Custom `database =` and `pg_user =` attributes                          | PASSED |
 | `//tests:bundled_bin_{16,17,18}_test` | psql, pg_dump, pg_isready, createdb, dropdb, pg_restore resolve to `$PG_BIN` in the runfiles at the test's version; createdb works; bundled lib dir not on the library path (#7) | PASSED |
-| `//tests:client_tool_{16,17,18}_test` | `//:psql_<v>`, `pg_dump_<v>`, `pg_restore_<v>`, `pg_dumpall_<v>`, `pg_isready_<v>` run the bundled clients at their version with no PG_BIN on PATH and no library path; `pg_dump -f ./out.sql` writes into `$BUILD_WORKING_DIRECTORY`, and `psql -f ./out.sql` reads it back (#9) | PASSED |
+| `//tests:client_tool_{16,17,18}_test` | `//:psql_<v>`, `pg_dump_<v>`, `pg_restore_<v>`, `pg_dumpall_<v>`, `pg_isready_<v>` run the bundled clients at their version with no PG_BIN on PATH and no library path; `pg_dump -f ./out.sql` writes into `$BUILD_WORKING_DIRECTORY` (also with a relative `RUNFILES_DIR`), and `psql -f ./out.sql` reads it back (#9) | PASSED |
 | `//tests:pg_server_test`       | pg_server start, env file (PG* and PG_BIN), schema+seed via `$PG_BIN/psql`, SIGTERM clean shutdown | PASSED |
 | `//tests:pg_health_check_test` | pg_health_check exits non-zero without env file, 0 when file is present | PASSED |
 

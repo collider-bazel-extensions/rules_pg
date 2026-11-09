@@ -19,6 +19,12 @@ work="$TEST_TMPDIR/caller"; mkdir -p "$work"
 BUILD_WORKING_DIRECTORY="$work" "$TOOL_pg_dump" -f ./out.sql || fail "pg_dump"
 [[ -s "$work/out.sql" ]] || fail "pg_dump -f ./out.sql did not write into BUILD_WORKING_DIRECTORY"
 grep -q "PostgreSQL database dump" "$work/out.sql" || fail "out.sql is not a dump"
+# A relative RUNFILES_DIR (the test's cwd is <runfiles>/_main) still works
+# after the cd.
+rm -f "$work/out.sql"
+RUNFILES_DIR=.. BUILD_WORKING_DIRECTORY="$work" "$TOOL_pg_dump" -f ./out.sql \
+  || fail "pg_dump with a relative RUNFILES_DIR"
+[[ -s "$work/out.sql" ]] || fail "pg_dump with a relative RUNFILES_DIR wrote nothing"
 BUILD_WORKING_DIRECTORY="$work" "$TOOL_psql" -v ON_ERROR_STOP=1 -q -c 'create database restored' \
   || fail "create database"
 BUILD_WORKING_DIRECTORY="$work" "$TOOL_psql" -v ON_ERROR_STOP=1 -q -d restored -f ./out.sql >/dev/null \

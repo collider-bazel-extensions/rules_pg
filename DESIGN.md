@@ -122,8 +122,8 @@ named file from the binary's `bin/` and writes a small bash wrapper as the
 executable:
 
 - It locates its runfiles through `$0.runfiles` (`bazel run`) or
-  `RUNFILES_DIR` (when it is another target's `data`), and runs the client by
-  its runfiles path.
+  `RUNFILES_DIR` (when it is another target's `data`), makes that path
+  absolute, and runs the client by its runfiles path.
 - It `cd`s to `$BUILD_WORKING_DIRECTORY` first, so relative paths in the
   arguments (`pg_dump -f ./dump.sql`) mean the caller's directory rather than
   the runfiles tree. A plain symlink as the executable could not do this.
