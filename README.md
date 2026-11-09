@@ -25,6 +25,7 @@ parallelism is safe.
   - [pg\_server](#pg_server)
   - [pg\_health\_check](#pg_health_check)
   - [postgres\_binary](#postgres_binary)
+  - [Runnable clients](#runnable-clients-psql_v-pg_dump_v-)
 - [rules\_itest integration](#rules_itest-integration)
 - [Providers](#providers)
   - [PostgresBinaryInfo](#postgresbinaryinfo)
@@ -49,7 +50,7 @@ parallelism is safe.
 Add to your `MODULE.bazel`:
 
 ```python
-bazel_dep(name = "rules_pg", version = "0.5.2")
+bazel_dep(name = "rules_pg", version = "0.6.0")
 
 pg = use_extension("@rules_pg//:extensions.bzl", "pg")
 
@@ -471,6 +472,40 @@ postgres_schema(
     srcs = glob(["migrations/*.sql"]),
     binary = "@rules_pg//:pg_16",
 )
+```
+
+### Runnable clients (`psql_<v>`, `pg_dump_<v>`, …)
+
+v0.6.0+. For each major version 14–18, the root package has a runnable target
+per client: `psql_<v>`, `pg_dump_<v>`, `pg_restore_<v>`, `pg_dumpall_<v>` and
+`pg_isready_<v>`. They run the version you registered with `pg.version()` (or
+the host's with `pg.system()`), not whatever `psql` is on the host:
+
+```sh
+bazel run @rules_pg//:psql_16 -- --version          # psql (PostgreSQL) 16.x
+bazel run @rules_pg//:psql_16 -- "host=… dbname=… user=…" -f ./migrate.sql
+bazel run @rules_pg//:pg_dump_16 -- -h … -U … -f ./dump.sql mydb
+```
+
+- **Relative paths resolve from where you ran `bazel run`**: the target
+  changes to `$BUILD_WORKING_DIRECTORY` before running the client, so
+  `-f ./dump.sql` lands in your directory, not in Bazel's runfiles.
+- **No library path is set, and none is needed.** The bundled binaries find
+  the bundled libpq through their RPATH (`$ORIGIN/../lib`); the target ships
+  the whole install in its runfiles. Setting `LD_LIBRARY_PATH` would make
+  every host program the client starts load the bundled libraries (the crash
+  fixed in v0.5.2).
+- **As a dependency:** put a target in another rule's `data` and run its
+  runfiles path; it finds its runfiles through `$0.runfiles` or
+  `RUNFILES_DIR`.
+- **Versions:** the target's repository must exist, so register the version
+  (`pg.version(versions = ["16"])`). With `pg.system()`, a client the host
+  install lacks fails at analysis with a message listing the clients it has.
+
+To use one under a shorter name in your own repo:
+
+```python
+alias(name = "psql", actual = "@rules_pg//:psql_16")
 ```
 
 ---

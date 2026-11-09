@@ -15,6 +15,7 @@ rules_pg/
 ├── repositories.bzl          # Legacy WORKSPACE equivalents of extensions.bzl
 ├── private/
 │   ├── binary.bzl            # postgres_binary rule + PostgresBinaryInfo provider
+│   ├── tool.bzl              # postgres_tool: runnable psql_<v>, pg_dump_<v>, ... (root BUILD)
 │   ├── schema.bzl            # postgres_schema rule + PostgresSchemaInfo provider
 │   ├── seed.bzl              # pg_seed_data rule + PostgresSeedInfo provider
 │   ├── test.bzl              # pg_test macro + _pg_launcher_test rule
@@ -155,6 +156,14 @@ pg_health_check(
     server = ":my_db",
 )
 ```
+
+### Runnable clients (v0.6.0)
+
+The root package has `psql_<v>`, `pg_dump_<v>`, `pg_restore_<v>`,
+`pg_dumpall_<v>` and `pg_isready_<v>` for v in 14–18 (`postgres_tool`,
+`private/tool.bzl`, #9). `bazel run @rules_pg//:psql_16 -- ...` runs the
+bundled client from `$BUILD_WORKING_DIRECTORY`; no library path is set (the
+binaries' RPATH finds libpq). No unversioned alias, by design.
 
 ### `pg_server` readiness protocol
 
@@ -332,9 +341,9 @@ All tests must pass before any commit with code changes.
 
 All documentation (`README.md`, `DESIGN.md`, `CLAUDE.md`) must be updated to reflect any code changes before committing. This includes new rules, changed attributes, new public API surface, and behaviour changes.
 
-### Test results (last full run: 2026-11-07)
+### Test results (last full run: 2026-11-08)
 
-All 16 tests pass on Linux x86_64 with the hermetic conda-forge binaries
+All 19 tests pass on Linux x86_64 with the hermetic conda-forge binaries
 (`pg.version()`; 14.24, 15.19, 16.15, 17.11, 18.6). Each `pg<N>_smoke_test`
 checks `server_version_num` against the major in its target name.
 
@@ -352,6 +361,7 @@ checks `server_version_num` against the major in its target name.
 | `//tests:csv_seed_test`        | CSV seed loading via `\copy`; exact row counts                          | PASSED |
 | `//tests:custom_db_test`       | Custom `database =` and `pg_user =` attributes                          | PASSED |
 | `//tests:bundled_bin_{16,17,18}_test` | psql, pg_dump, pg_isready, createdb, dropdb, pg_restore resolve to `$PG_BIN` in the runfiles at the test's version; createdb works; bundled lib dir not on the library path (#7) | PASSED |
+| `//tests:client_tool_{16,17,18}_test` | `//:psql_<v>`, `pg_dump_<v>`, `pg_restore_<v>`, `pg_dumpall_<v>`, `pg_isready_<v>` run the bundled clients at their version with no PG_BIN on PATH and no library path; `pg_dump -f ./out.sql` writes into `$BUILD_WORKING_DIRECTORY` (also with a relative `RUNFILES_DIR`), and `psql -f ./out.sql` reads it back (#9) | PASSED |
 | `//tests:pg_server_test`       | pg_server start, env file (PG* and PG_BIN), schema+seed via `$PG_BIN/psql`, SIGTERM clean shutdown | PASSED |
 | `//tests:pg_health_check_test` | pg_health_check exits non-zero without env file, 0 when file is present | PASSED |
 

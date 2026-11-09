@@ -225,3 +225,20 @@ sh_test(
     size = "medium",
     tags = ["pg"],
 ) for v in ["16", "17", "18"]]
+
+# The runnable client targets run the bundled clients at their version and
+# resolve relative paths from BUILD_WORKING_DIRECTORY (rules_pg#9).
+[pg_test(
+    name = "client_tool_{}_test".format(v),
+    srcs = ["client_tool_test.sh"],
+    args = [v],
+    data = ["//:{}_{}".format(t, v) for t in ["psql", "pg_dump", "pg_restore", "pg_dumpall", "pg_isready"]],
+    env = {
+        "TOOL_" + t: "$(rootpath //:{}_{})".format(t, v)
+        for t in ["psql", "pg_dump", "pg_restore", "pg_dumpall", "pg_isready"]
+    },
+    postgres_version = v,
+    schema = ":test_schema",
+    size = "medium",
+    tags = ["pg"],
+) for v in ["16", "17", "18"]]
