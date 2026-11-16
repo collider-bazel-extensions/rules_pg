@@ -1097,3 +1097,11 @@ paste them into the `_PG_VERSIONS` dict in both `extensions.bzl` and
 
 Contributions via pull request are welcome. Please include a test in
 `tests/BUILD.bazel` for any new feature or bug fix.
+
+---
+
+## Requesting a new rules package
+
+Want Bazel rules for another tool or service?
+[Request a rules package](https://github.com/collider-bazel-extensions/.github/issues/new?template=request-a-rules-package.yml).
+The [organization page](https://github.com/collider-bazel-extensions) lists every package.
