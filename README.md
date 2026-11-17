@@ -50,7 +50,7 @@ parallelism is safe.
 Add to your `MODULE.bazel`:
 
 ```python
-bazel_dep(name = "rules_pg", version = "0.6.0")
+bazel_dep(name = "rules_pg", version = "0.6.1")
 
 pg = use_extension("@rules_pg//:extensions.bzl", "pg")
 
@@ -1105,3 +1105,7 @@ Contributions via pull request are welcome. Please include a test in
 Want Bazel rules for another tool or service?
 [Request a rules package](https://github.com/collider-bazel-extensions/.github/issues/new?template=request-a-rules-package.yml).
 The [organization page](https://github.com/collider-bazel-extensions) lists every package.
+
+## License
+
+[Apache License 2.0](LICENSE) (SPDX: `Apache-2.0`).
