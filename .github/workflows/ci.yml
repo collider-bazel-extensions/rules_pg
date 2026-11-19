@@ -65,3 +65,32 @@ jobs:
           name: bazel-testlogs-hermetic
           path: bazel-testlogs/
           if-no-files-found: ignore
+
+  consumer:
+    # The release archive (git archive honours .gitattributes export-ignore,
+    # as GitHub's tag tarballs do) must load with //... for a consumer.
+    name: consumer (ubuntu-latest, git archive)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+      - name: bazel query @rules_pg//... from git archive HEAD
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/rules_pg"; c="$RUNNER_TEMP/consumer"
+          mkdir -p "$src" "$c"
+          git archive HEAD | tar -x -C "$src"
+          test ! -e "$src/tests" || { echo "FAIL: archive has tests/" >&2; exit 1; }
+          cat > "$c/MODULE.bazel" <<EOF
+          module(name = "consumer")
+          bazel_dep(name = "rules_pg", version = "0.0.0")
+          local_path_override(module_name = "rules_pg", path = "$src")
+          EOF
+          touch "$c/BUILD.bazel"
+          cd "$c"
+          n=$(bazel query @rules_pg//... | wc -l)
+          echo "@rules_pg//... has $n targets"
+          test "$n" -gt 0

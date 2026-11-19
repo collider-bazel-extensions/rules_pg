@@ -5,7 +5,7 @@ own isolated `initdb`'d cluster on a random port, spun up and torn down by the
 test launcher. No system Postgres installation required. Full `--jobs`
 parallelism is safe.
 
-> **v0.7.0 is a breaking release.** Each instance now lives in
+> **v0.7.0 is a breaking release** (use v0.7.1: v0.7.0's archive did not load with `@rules_pg//...`). Each instance now lives in
 > `$TEST_TMPDIR/<name>.pg/` (data directory `pgdata/`, log `pg.log`), not
 > `$TEST_TMPDIR/pgdata` and `$TEST_TMPDIR/pg.log`, so two `pg_server`s, or a
 > `pg_server` and a `pg_test`, can share a test. Two targets with the same
@@ -60,12 +60,12 @@ Add to your `MODULE.bazel` (rules_pg is not in the Bazel Central Registry, so
 the `archive_override` says where to fetch it):
 
 ```python
-bazel_dep(name = "rules_pg", version = "0.7.0")
+bazel_dep(name = "rules_pg", version = "0.7.1")
 archive_override(
     module_name = "rules_pg",
     integrity = "INTEGRITY_AFTER_TAG",
-    strip_prefix = "rules_pg-0.7.0",
-    urls = ["https://github.com/collider-bazel-extensions/rules_pg/archive/refs/tags/v0.7.0.tar.gz"],
+    strip_prefix = "rules_pg-0.7.1",
+    urls = ["https://github.com/collider-bazel-extensions/rules_pg/archive/refs/tags/v0.7.1.tar.gz"],
 )
 
 pg = use_extension("@rules_pg//:extensions.bzl", "pg")
