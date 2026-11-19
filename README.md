@@ -63,7 +63,7 @@ the `archive_override` says where to fetch it):
 bazel_dep(name = "rules_pg", version = "0.7.1")
 archive_override(
     module_name = "rules_pg",
-    integrity = "INTEGRITY_AFTER_TAG",
+    integrity = "sha256-JT1GO2MIErQGRVDwazLOKSnL+spIcjaKV5At5sUQyCs=",
     strip_prefix = "rules_pg-0.7.1",
     urls = ["https://github.com/collider-bazel-extensions/rules_pg/archive/refs/tags/v0.7.1.tar.gz"],
 )
