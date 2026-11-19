@@ -1,0 +1,5 @@
+# Keep the release archive loadable for consumers: tests/ loads the dev-only
+# rules_itest, which a consumer can't see, so `bazel query @rules_pg//...`
+# would fail on it. GitHub's tag tarballs honour export-ignore. tools/ stays:
+# extensions.bzl loads //tools:conda_versions.bzl.
+tests/ export-ignore
