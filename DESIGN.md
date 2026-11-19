@@ -81,6 +81,11 @@ PostgresBinaryInfo        paths to pg_ctl, initdb, psql, pg_isready, pg_dump;
 `pg_test` and `pg_server` both accept a `schema` or `seed` label; they get the
 full binary and migration chain transitively without extra wiring.
 
+`schema` is optional (v0.7.0): its default is `@rules_pg//:empty_schema`, a
+`postgres_schema` with no `srcs` on `//:pg_default`, and `srcs` may be empty.
+Code that migrates its own database (rules_openmeter's OpenMeter) needs no
+placeholder `.sql` file.
+
 Using `depset(order="preorder")` for migration and seed files preserves the
 caller's declared order through the entire build graph without copying lists.
 
@@ -203,6 +208,46 @@ manager after the test) and `SIGINT` (for interactive `bazel run` sessions).
 Both handlers call `pg_ctl stop -m fast` then `sys.exit(0)`. `signal.pause()`
 is used for the blocking wait, consuming no CPU.
 
+### One instance per name (v0.7.0)
+
+Everything an instance writes is under `$TEST_TMPDIR`, scoped by the target
+name (the label's name; `pg_test` uses its own):
+
+```
+$TEST_TMPDIR/<name>.claim       JSON {"label", "pid", "rule", "boot_id", "start_time"}
+$TEST_TMPDIR/<name>.pg/pgdata   the cluster; dynamic shared memory in pg_dynshmem/
+$TEST_TMPDIR/<name>.pg/pg.log   the server log (pg_ctl -l)
+$TEST_TMPDIR/<name>.env         connection details (pg_server; unchanged)
+```
+
+Before v0.7.0 the data directory and log were `$TEST_TMPDIR/pgdata` and
+`$TEST_TMPDIR/pg.log` whatever the target, so a second instance in one test
+(two `pg_server`s in a `rules_itest` `service_test`, or a `pg_server` next to
+a `pg_test`) failed in `initdb` on a non-empty directory, or, started a moment
+later, ran on the first one's files. rules_openmeter worked around it by
+giving each Postgres its own `TEST_TMPDIR`.
+
+Name-scoping leaves one collision: two targets with the same name in
+different packages (`//a:db`, `//b:db`). The launcher's first step, before
+`initdb`, is to claim `$TEST_TMPDIR/<name>.claim`: it writes its claim to a
+temp file and `os.link`s it into place, which fails if the claim exists, so
+exactly one launcher wins and readers never see a partial file. The loser
+reads the claim; if its process still runs it exits 1 naming both labels
+(`pg_server //b:db: the name db ($TEST_TMPDIR/db.pg, db.env) is already used
+by pg_server //a:db (pid 16) in this test; give the targets different
+names`). A claim whose process has exited (a restarted service) is taken
+over, and the dead instance's `<name>.pg` and `<name>.env` are removed first.
+Liveness compares the pid's start time (`/proc/<pid>/stat`) and the boot id
+with those recorded, so a reused pid is not mistaken for the claimant; on
+macOS, without `/proc`, it is `kill(pid, 0)`. In test mode the launcher
+`exec`s the test with the same pid, so the claim stays live for the whole
+test. The format and approach are rules_kind's (v0.5.0) and
+rules_kubernetes's (v0.7.0), so a `pg_server` and a `kind_cluster` with the
+same name, which would share `<name>.env`, also see each other.
+
+Under `bazel run` there is no `$TEST_TMPDIR`; the instance and claim go in a
+fresh `mkdtemp` directory and the env file in `/tmp/<name>.env`, as before.
+
 ### `pg_health_check` rule
 
 `pg_health_check` generates a companion health-check binary for a `pg_server`
@@ -221,6 +266,8 @@ shared between the two rules by deriving it from `ctx.attr.server.label.name`.
 ```
 read manifest
   ↓
+claim $TEST_TMPDIR/<name>.claim   (exit 1 at once if another live target holds it)
+  ↓
 resolve runfile paths
   ↓
 ensure execute bits on PG binaries
@@ -229,9 +276,10 @@ detect actual binary version (pg_ctl --version)
   ↓
 allocate TCP port (socket.bind → port 0)
   ↓
-initdb  (--auth=scram-sha-256, UTF-8, no locale)
+initdb in <name>.pg/pgdata  (--auth=scram-sha-256, UTF-8, no locale, --no-sync;
+        PG 16+: --set dynamic_shared_memory_type=mmap)
   ↓
-append ephemeral postgresql.conf overrides
+append ephemeral postgresql.conf overrides, then the target's `config`
   ↓
 pg_ctl start  [+--socket-fd on PG 14–17]
   ↓
@@ -319,7 +367,38 @@ appending safe for numeric and string settings. Key choices:
 | `synchronous_commit` | `off` | Reduces write latency in tests. |
 | `full_page_writes` | `off` | Not needed without `fsync`. |
 | `logging_collector` | `off` | Forces logs to stderr → captured by `pg_ctl -l`. PG ≥ 15 defaults to `on`. |
-| `unix_socket_directories` | `''` | Bazel sandboxes mount `/var/run/postgresql` read-only; socket paths exceed the 107-byte OS limit. All connections use TCP. |
+| `unix_socket_directories` | `''` | Bazel sandboxes mount `/var/run/postgresql` read-only; socket paths exceed the 107-byte OS limit. All connections use TCP. Also: no socket or socket lock file in `/tmp`. |
+| `dynamic_shared_memory_type` | `mmap` | v0.7.0. The default, `posix`, creates `/dev/shm/PostgreSQL.<n>` segments, outside `$TEST_TMPDIR` and on a host-shared tmpfs (a killed test leaks them). `mmap` puts them in `pgdata/pg_dynshmem`. Parallel query works (checked by `isolation_*_test`). PostgreSQL's docs advise against `mmap` in production because dirty pages may be written back to disk; for a throwaway test cluster that cost is negligible. `sysv` was the alternative, but its segments are kernel objects that also outlive a killed test. |
+
+After these come the target's `config` (v0.7.0), a `string_dict` written as
+`name = 'value'` (quotes doubled, backslashes escaped), so a later line
+overrides rules_pg's default. Analysis (`private/config.bzl`) rejects names
+that aren't setting names, values with a newline (which would inject a
+second line), and the settings the launcher depends on: `port`,
+`listen_addresses`, `unix_socket_directories`, `logging_collector`,
+`log_destination`, `data_directory`, `config_file`, `hba_file`, `ident_file`,
+`external_pid_file`. Unknown settings are left to PostgreSQL, which refuses
+to start and whose log the launcher prints.
+
+`initdb` runs with `--no-sync` (v0.7.0): the cluster runs with `fsync = off`,
+and `initdb`'s final fsync of the whole data directory took ~40 s on a busy
+btrfs (0.4 s without).
+
+**Writes outside `$TEST_TMPDIR`.** With the above, the instance writes no file
+outside it; `isolation_{14,16,18}_test` run a `pg_server` from a read-only
+working directory, HOME and TMPDIR, make it write tables, an index, a spilled
+sort, a temp table, a checkpoint and a parallel query, check that no process
+of the instance maps a file under `/dev/shm` (through `/proc/<pid>/maps`,
+which attributes exactly), and then that no file outside `$TEST_TMPDIR` is
+newer than a marker: anywhere in the working directory and runfiles tree, and
+by name (`postgres|pgsql|/pg|rules_pg`) in `/tmp`, `/var/tmp` and `/dev/shm`,
+which are host-wide under the processwrapper sandbox of GitHub's runners and
+see other builds' and tests' files. A `/dev/shm` segment that is gone 2 s
+later is another test's `initdb` (14/15) and is ignored. What remains is kernel state: the
+postmaster's small System V shared memory segment (an IPC key, not a file),
+and transient POSIX segments created and removed by `initdb` (one probe to
+choose a default; on 14 and 15, which lack `initdb --set`, also its bootstrap
+backends').
 
 ### Seed data dispatch
 
@@ -352,6 +431,9 @@ rules_itest service manager
 
 `$TEST_TMPDIR` is set by Bazel on the test runner process and inherited by all
 service subprocesses, so all parties share the same directory for the env file.
+Each `pg_server` keeps its cluster in `$TEST_TMPDIR/<name>.pg`, so any number
+can run in one `service_test` (`//tests:two_servers_test` runs two, plus the
+`pg_test` that is its test).
 
 ---
 
@@ -454,6 +536,7 @@ Both modes are valid per-version. The extension partitions tags: `pg.system()` w
 - **Automatic migration ordering**: Files are applied in the order listed by the
   caller. There is no dependency resolver; numeric prefixes (`001_`, `002_`, …)
   are the recommended convention.
-- **Unique server names**: The `$TEST_TMPDIR/<name>.env` convention requires
-  that all `pg_server` targets in a single test run have distinct target names.
-  Targets in different packages with the same local name would collide.
+- **Unique names per test**: all `pg_server` / `pg_test` targets in a single
+  test need distinct target names (`$TEST_TMPDIR/<name>.*`). Two with the same
+  local name in different packages fail at once, naming both (v0.7.0; before,
+  they silently shared files).

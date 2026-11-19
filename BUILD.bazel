@@ -1,4 +1,5 @@
 load("//private:binary.bzl", "postgres_binary")
+load("//private:schema.bzl", "postgres_schema")
 load("//private:tool.bzl", "postgres_tool")
 
 # ---------------------------------------------------------------------------
@@ -43,6 +44,13 @@ load("//private:tool.bzl", "postgres_tool")
 alias(
     name = "pg_default",
     actual = ":pg_16",
+    visibility = ["//visibility:public"],
+)
+
+# The default `schema` of pg_server and pg_test: no migrations, on
+# :pg_default. pg_test's postgres_version still picks the binary.
+postgres_schema(
+    name = "empty_schema",
     visibility = ["//visibility:public"],
 )
 

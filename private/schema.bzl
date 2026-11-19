@@ -59,8 +59,9 @@ platform-appropriate Postgres installation registered by the module extension.
     attrs = {
         "srcs": attr.label_list(
             allow_files = [".sql"],
-            mandatory = True,
-            doc = "SQL migration files in application order.",
+            doc = "SQL migration files in application order. May be empty " +
+                  "(a database with no migrations, e.g. one the code under " +
+                  "test migrates itself).",
         ),
         "binary": attr.label(
             default = Label("//:pg_default"),

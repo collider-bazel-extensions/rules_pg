@@ -20,11 +20,14 @@ rules_pg/
 │   ├── seed.bzl              # pg_seed_data rule + PostgresSeedInfo provider
 │   ├── test.bzl              # pg_test macro + _pg_launcher_test rule
 │   ├── server.bzl            # pg_server rule + pg_health_check rule
+│   ├── config.bzl            # label_string + `config` validation (pg_server, pg_test)
 │   └── launcher.py           # Shared launcher: initdb → migrate → seed → (exec test | serve)
 ├── toolchain/
 │   └── toolchain.bzl         # Toolchain type + register helpers
 └── tests/
     ├── BUILD.bazel
+    ├── analysis_tests.bzl    # empty schema; `config` analysis errors
+    ├── clash/                # //tests/clash:two_a, same name as //tests:two_a
     ├── schema/               # Example migration SQL files (001_init.sql, 002_seed.sql)
     └── seed/                 # Example seed files (seed.sql, tags.csv)
 ```
@@ -42,12 +45,24 @@ PostgresBinaryInfo
 
 ### `pg_test` isolation model
 
-Every `pg_test` target gets:
-- Its own `initdb`'d cluster under `$TEST_TMPDIR/pgdata`
+Every `pg_test` target and every `pg_server` gets:
+- Its own `initdb`'d cluster under `$TEST_TMPDIR/<name>.pg/pgdata`, log in
+  `$TEST_TMPDIR/<name>.pg/pg.log` (v0.7.0; before: `$TEST_TMPDIR/pgdata`, `pg.log`)
+- A claim on its name, `$TEST_TMPDIR/<name>.claim` (atomic `os.link`; JSON
+  `{"label","pid","rule","boot_id","start_time"}`, rules_kind's format). A
+  second live target with the same name in one test exits 1 before initdb,
+  naming both labels; a dead claimant's claim, `<name>.pg` and `<name>.env`
+  are taken over / removed.
 - A randomly assigned free TCP port (TOCTOU-safe on PG 14–17; retried on PG 18+)
 - Env vars injected: `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, and `PG_BIN` (the bundled `bin/` in the runfiles), prepended to `PATH`, so `psql` & co. are the bundled clients, never the host's (#7). The bundled lib dir is not put on the test's library path (the binaries use their RPATH).
 
-No shared state between tests → full `--jobs` parallelism is safe.
+No shared state between tests or between instances in one test → full
+`--jobs` parallelism is safe, and any number of differently-named instances
+can share a `$TEST_TMPDIR` (rules_itest).
+
+Nothing is written outside `$TEST_TMPDIR`: `dynamic_shared_memory_type = mmap`
+(segments in `pgdata/pg_dynshmem`, not `/dev/shm`), no Unix sockets. Checked
+by `//tests:isolation_{14,16,18}_test`.
 
 ### Port allocation
 
@@ -118,6 +133,7 @@ postgres_schema(
     name = "my_schema",
     srcs = glob(["migrations/*.sql"]),
     # Files are applied in the order listed. Use numeric prefixes: 001_init.sql
+    # srcs may be empty (v0.7.0).
 )
 
 pg_seed_data(
@@ -130,9 +146,10 @@ pg_seed_data(
 pg_test(
     name = "my_test",
     srcs = ["my_test.go"],
-    schema = ":my_schema",          # required
+    schema = ":my_schema",          # optional (v0.7.0); default: no migrations
     seed = ":my_seed",              # optional
     postgres_version = "16",        # optional; "14"…"18". Default: the schema's binary (16)
+    config = {"work_mem": "64MB"},  # optional (v0.7.0); postgresql.conf settings
     database = "testdb",            # optional, default "test"
     pg_user = "postgres",           # optional
     pg_password = "postgres",       # optional
@@ -143,7 +160,8 @@ pg_test(
 # Long-running service (for rules_itest and multi-service orchestration):
 pg_server(
     name = "my_db",
-    schema = ":my_schema",          # required
+    schema = ":my_schema",          # optional (v0.7.0); default @rules_pg//:empty_schema
+    config = {},                    # optional (v0.7.0); postgresql.conf settings
     seed = ":my_seed",              # optional
     database = "testdb",            # optional, default "test"
     pg_user = "postgres",           # optional
@@ -193,7 +211,13 @@ test) or SIGINT (Ctrl-C during `bazel run`).
 ### MODULE.bazel (Bzlmod)
 
 ```python
-bazel_dep(name = "rules_pg", version = "0.1.0")
+bazel_dep(name = "rules_pg", version = "0.7.0")
+archive_override(
+    module_name = "rules_pg",
+    integrity = "INTEGRITY_AFTER_TAG",
+    strip_prefix = "rules_pg-0.7.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_pg/archive/refs/tags/v0.7.0.tar.gz"],
+)
 
 pg = use_extension("@rules_pg//:extensions.bzl", "pg")
 
@@ -341,9 +365,9 @@ All tests must pass before any commit with code changes.
 
 All documentation (`README.md`, `DESIGN.md`, `CLAUDE.md`) must be updated to reflect any code changes before committing. This includes new rules, changed attributes, new public API surface, and behaviour changes.
 
-### Test results (last full run: 2026-11-08)
+### Test results (last full run: 2026-11-19)
 
-All 19 tests pass on Linux x86_64 with the hermetic conda-forge binaries
+All 33 tests pass on Linux x86_64 with the hermetic conda-forge binaries
 (`pg.version()`; 14.24, 15.19, 16.15, 17.11, 18.6). Each `pg<N>_smoke_test`
 checks `server_version_num` against the major in its target name.
 
@@ -364,6 +388,12 @@ checks `server_version_num` against the major in its target name.
 | `//tests:client_tool_{16,17,18}_test` | `//:psql_<v>`, `pg_dump_<v>`, `pg_restore_<v>`, `pg_dumpall_<v>`, `pg_isready_<v>` run the bundled clients at their version with no PG_BIN on PATH and no library path; `pg_dump -f ./out.sql` writes into `$BUILD_WORKING_DIRECTORY` (also with a relative `RUNFILES_DIR`), and `psql -f ./out.sql` reads it back (#9) | PASSED |
 | `//tests:pg_server_test`       | pg_server start, env file (PG* and PG_BIN), schema+seed via `$PG_BIN/psql`, SIGTERM clean shutdown | PASSED |
 | `//tests:pg_health_check_test` | pg_health_check exits non-zero without env file, 0 when file is present | PASSED |
+| `//tests:two_servers_test`     | rules_itest `service_test`: two pg_servers (`two_a`, `two_b`) plus the test's own pg_test instance; each `data_directory` is `$TEST_TMPDIR/<name>.pg/pgdata`, ports differ, a table written in one is invisible in the others (v0.7.0) | PASSED |
+| `//tests:same_name_clash_test` | `//tests/clash:two_a` next to a running `//tests:two_a` exits 1 at once, before initdb, naming both labels; the first's env file is unchanged and it still answers; `two_a.claim` holds `{"label","pid","rule"}` (v0.7.0) | PASSED |
+| `//tests:isolation_{14,16,18}_test` | A pg_server run from a read-only cwd / HOME / TMPDIR writes tables, an index, a spilled sort, a temp table, a checkpoint and a parallel query (workers launched); no instance process maps a file under `/dev/shm` (`/proc/<pid>/maps`); `dynamic_shared_memory_type` is `mmap`; nothing outside `$TEST_TMPDIR` is newer than a marker (cwd and runfiles: any file; `/tmp`, `/var/tmp`, `/dev/shm`: by name, as they are host-wide in CI) (v0.7.0) | PASSED |
+| `//tests:no_schema_test`, `//tests:empty_schema_test` | `pg_test` with no `schema`, and with a `postgres_schema` with no `srcs`: an empty, usable database in `$TEST_TMPDIR/<name>.pg` (v0.7.0) | PASSED |
+| `//tests:config_test`          | `config` reaches postgresql.conf (a quote in a value survives; overrides rules_pg's `synchronous_commit`) (v0.7.0) | PASSED |
+| `//tests:analysis_tests_*` (6) | empty `postgres_schema` has no migrations; `config` with a reserved setting, a bad name or a multi-line value fails analysis (v0.7.0) | PASSED |
 
 ### Adding a new Postgres version
 
@@ -385,12 +415,15 @@ wrapper script):
 
 Both modes share `_pg_setup`, which:
 
-1. Reads the JSON manifest written by the Bazel rule (`RULES_PG_MANIFEST`).
+1. Reads the JSON manifest written by the Bazel rule (`RULES_PG_MANIFEST`),
+   including `name`, `label`, `rule` and `config`; claims
+   `$TEST_TMPDIR/<name>.claim` (exits 1 if another live target holds it) and
+   removes a dead claimant's `<name>.pg` and `<name>.env`.
 2. Resolves all runfile paths (external repos use `../repo/path`; workspace files use `<workspace>/path`).
 3. Ensures all PostgreSQL binaries have the execute bit set.
 4. Detects the actual binary version via `pg_ctl --version` (needed for `--socket-fd` gating).
-5. Creates `$TEST_TMPDIR/pgdata` (mode 0700) and runs `initdb --auth=scram-sha-256`.
-6. Writes ephemeral `postgresql.conf` overrides: port, `fsync=off`, `logging_collector=off`, `unix_socket_directories=''`.
+5. Creates `$TEST_TMPDIR/<name>.pg/pgdata` (mode 0700) and runs `initdb --auth=scram-sha-256 --no-sync` (PG 16+: `--set dynamic_shared_memory_type=mmap`).
+6. Writes ephemeral `postgresql.conf` overrides: port, `fsync=off`, `logging_collector=off`, `unix_socket_directories=''`, `dynamic_shared_memory_type=mmap`, then the target's `config` (quoted; validated in `private/config.bzl`, reserved names re-checked in the launcher).
 7. Starts `pg_ctl`, passing `--socket-fd` on PG 14–17 (eliminated in PG 18).
 8. Polls `pg_isready` until the server accepts connections (max 15 s).
 9. Retries startup on port conflicts only; fails immediately on all other errors.
@@ -428,8 +461,9 @@ All test shell scripts must:
   `tools/update_checksums.sh` still point at EnterpriseDB tarballs (14.11 /
   15.6 / 16.2); the Linux one returns 403. Bzlmod's `pg.version()` (conda-forge)
   is unaffected. WORKSPACE has no 17/18 entries.
-- The launcher doesn't put the hermetic `bin/` on the test's `PATH`, so tests
-  that call `psql` use the host's client (any version can talk to the server).
-- `pg_server` target names must be unique within a test run. Two `pg_server`
-  targets with the same local name in different packages would write to the same
-  `$TEST_TMPDIR/<name>.env` path.
+- `pg_server` / `pg_test` target names must be unique within a test run. Two
+  with the same local name in different packages fail at once (claim), naming
+  both labels (v0.7.0).
+- The instance still uses kernel state outside `$TEST_TMPDIR`: the
+  postmaster's small SysV shared memory segment, and transient POSIX segments
+  `initdb` creates and removes (a probe; on PG 14/15 also its bootstrap).

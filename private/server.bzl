@@ -1,5 +1,6 @@
 "pg_server rule and pg_health_check rule."
 
+load("//private:config.bzl", "CONFIG_DOC", "check_config", "label_string")
 load("//private:schema.bzl", "PostgresSchemaInfo")
 load("//private:seed.bzl", "PostgresSeedInfo")
 
@@ -8,6 +9,8 @@ load("//private:seed.bzl", "PostgresSeedInfo")
 # ---------------------------------------------------------------------------
 
 def _pg_server_impl(ctx):
+    label = label_string(ctx.label)
+    check_config("pg_server " + label, ctx.attr.config)
     schema_info = ctx.attr.schema[PostgresSchemaInfo]
     binary_info = schema_info.binary
 
@@ -30,6 +33,11 @@ def _pg_server_impl(ctx):
         database    = ctx.attr.database,
         pg_user     = ctx.attr.pg_user,
         pg_password = ctx.attr.pg_password,
+        config      = ctx.attr.config,
+        # The instance: $TEST_TMPDIR/<name>.pg, claimed by <name>.claim.
+        name        = ctx.label.name,
+        label       = label,
+        rule        = "pg_server",
     )
     manifest = ctx.actions.declare_file(ctx.label.name + "_pg_manifest.json")
     ctx.actions.write(
@@ -88,8 +96,10 @@ pg_server = rule(
 Produces a long-running PostgreSQL server binary.
 
 When executed, pg_server:
-  1. Runs initdb, starts an ephemeral cluster, applies schema migrations, and
-     loads seed data.
+  1. Claims $TEST_TMPDIR/<name>.claim (failing at once if another target
+     with the same name holds it), runs initdb in $TEST_TMPDIR/<name>.pg,
+     starts an ephemeral cluster, applies schema migrations, and loads seed
+     data.
   2. Writes PGHOST / PGPORT / PGDATABASE / PGUSER / PGPASSWORD to
      $TEST_TMPDIR/<name>.env once the cluster is fully ready.
   3. Blocks until SIGTERM or SIGINT, then stops the cluster cleanly.
@@ -123,10 +133,12 @@ The wrapped test reads connection details from $TEST_TMPDIR/db.env:
 """,
     attrs = {
         "schema": attr.label(
-            mandatory = True,
+            default   = Label("//:empty_schema"),
             providers = [PostgresSchemaInfo],
-            doc       = "postgres_schema target to apply before serving.",
+            doc       = "postgres_schema target to apply before serving. " +
+                        "Default: none (an empty database on `//:pg_default`).",
         ),
+        "config": attr.string_dict(doc = CONFIG_DOC),
         "seed": attr.label(
             mandatory = False,
             providers = [PostgresSeedInfo],

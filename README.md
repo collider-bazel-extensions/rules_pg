@@ -5,6 +5,15 @@ own isolated `initdb`'d cluster on a random port, spun up and torn down by the
 test launcher. No system Postgres installation required. Full `--jobs`
 parallelism is safe.
 
+> **v0.7.0 is a breaking release.** Each instance now lives in
+> `$TEST_TMPDIR/<name>.pg/` (data directory `pgdata/`, log `pg.log`), not
+> `$TEST_TMPDIR/pgdata` and `$TEST_TMPDIR/pg.log`, so two `pg_server`s, or a
+> `pg_server` and a `pg_test`, can share a test. Two targets with the same
+> name in one test now fail at once. Dynamic shared memory is in the data
+> directory (`dynamic_shared_memory_type = mmap`), not `/dev/shm`. The env
+> file, `$TEST_TMPDIR/<name>.env`, and its variables are unchanged. See
+> [Parallelism and isolation](#parallelism-and-isolation).
+
 **Supported platforms:** Linux (x86\_64), macOS (arm64, x86\_64)  
 **Supported PostgreSQL versions:** 14, 15, 16, 17, 18 (hermetic pins: 14.24,
 15.19, 16.15, 17.11, 18.6). PostgreSQL 14 reaches upstream end of life on
@@ -47,10 +56,17 @@ parallelism is safe.
 
 ### Bzlmod (MODULE.bazel)
 
-Add to your `MODULE.bazel`:
+Add to your `MODULE.bazel` (rules_pg is not in the Bazel Central Registry, so
+the `archive_override` says where to fetch it):
 
 ```python
-bazel_dep(name = "rules_pg", version = "0.6.1")
+bazel_dep(name = "rules_pg", version = "0.7.0")
+archive_override(
+    module_name = "rules_pg",
+    integrity = "INTEGRITY_AFTER_TAG",
+    strip_prefix = "rules_pg-0.7.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_pg/archive/refs/tags/v0.7.0.tar.gz"],
+)
 
 pg = use_extension("@rules_pg//:extensions.bzl", "pg")
 
@@ -203,7 +219,7 @@ they appear in `srcs`.
 | Attribute | Type | Default | Description |
 |---|---|---|---|
 | `name` | `string` | required | Target name. |
-| `srcs` | `label_list` | required | `.sql` migration files, applied in listed order. |
+| `srcs` | `label_list` | `[]` | `.sql` migration files, applied in listed order. May be empty (v0.7.0): a database the code under test migrates itself. Before v0.7.0 it was required. |
 | `binary` | `label` | `//:pg_default` | `postgres_binary` target supplying the server executables. Override to pin a specific version. |
 
 **Example — explicit ordering:**
@@ -230,6 +246,11 @@ postgres_schema(
 
 > **Warning:** `glob()` returns files in alphabetical order. If your filenames
 > do not sort into the correct application order, list them explicitly.
+
+**No migrations.** `pg_test` and `pg_server` need no `schema` at all (v0.7.0):
+they then get an empty database on `//:pg_default`. For another version with
+no migrations, use a schema with no `srcs`:
+`postgres_schema(name = "pg18", binary = "@rules_pg//:pg_18")`.
 
 ---
 
@@ -281,7 +302,7 @@ load("@rules_pg//:defs.bzl", "pg_test")
 
 pg_test(
     name = "...",
-    schema = ":schema",
+    schema = None,               # None = no migrations (an empty database)
     srcs = [...],
     deps = [...],
     seed = None,
@@ -289,6 +310,7 @@ pg_test(
     database = "test",
     pg_user = "postgres",
     pg_password = "postgres",
+    config = None,               # postgresql.conf settings, {"name": "value"}
     size = "medium",
     timeout = None,
     tags = [],
@@ -299,7 +321,8 @@ pg_test(
 
 Wraps any `*_test` rule with an ephemeral PostgreSQL cluster. The launcher:
 
-1. Runs `initdb` in `$TEST_TMPDIR/pgdata`
+1. Claims the name in `$TEST_TMPDIR/<name>.claim` and runs `initdb` in
+   `$TEST_TMPDIR/<name>.pg/pgdata` (before v0.7.0: `$TEST_TMPDIR/pgdata`)
 2. Binds a free TCP port and starts the server (using `--socket-fd` on PG ≥ 14
    to eliminate port-allocation races)
 3. Polls `pg_isready` until the server accepts connections
@@ -318,7 +341,7 @@ run).
 | Attribute | Type | Default | Description |
 |---|---|---|---|
 | `name` | `string` | required | Target name. |
-| `schema` | `label` | required | `postgres_schema` target to apply before the test. |
+| `schema` | `label` | `None` | `postgres_schema` target to apply before the test. `None` (v0.7.0; required before): no migrations, an empty database. |
 | `srcs` | `label_list` | `[]` | Test source files, forwarded to `test_rule`. |
 | `deps` | `label_list` | `[]` | Test dependencies, forwarded to `test_rule`. |
 | `seed` | `label` | `None` | Optional `pg_seed_data` target loaded after migrations. |
@@ -326,6 +349,7 @@ run).
 | `database` | `string` | `"test"` | Name of the database created for the test. |
 | `pg_user` | `string` | `"postgres"` | Database superuser name. |
 | `pg_password` | `string` | `"postgres"` | Database superuser password. |
+| `config` | `dict` | `{}` | postgresql.conf settings (v0.7.0). See [`pg_server`](#pg_server). |
 | `size` | `string` | `"medium"` | Bazel test size. |
 | `timeout` | `string` | `None` | Bazel test timeout override. |
 | `tags` | `string_list` | `[]` | Additional Bazel tags. |
@@ -373,11 +397,12 @@ load("@rules_pg//:defs.bzl", "pg_server")
 
 pg_server(
     name = "...",
-    schema = ":schema",          # PostgreSQL version: the schema's `binary`
+    schema = ":schema",          # optional; PostgreSQL version: the schema's `binary`
     seed = None,
     database = "test",
     pg_user = "postgres",
     pg_password = "postgres",
+    config = {},                 # postgresql.conf settings
 )
 ```
 
@@ -393,6 +418,22 @@ manager that runs services alongside integration tests.
 `.tmp` rename) so readers never observe a partial write. Its mere existence
 signals that the cluster is fully up and ready to accept connections.
 
+**Files.** Everything is under `$TEST_TMPDIR`, scoped by the target name
+(v0.7.0):
+
+| Path | What |
+|---|---|
+| `$TEST_TMPDIR/<name>.env` | Connection details (unchanged). |
+| `$TEST_TMPDIR/<name>.claim` | Which target owns `<name>` in this test: JSON `{"label", "pid", "rule", ...}`. |
+| `$TEST_TMPDIR/<name>.pg/pgdata` | The data directory, including dynamic shared memory (`pg_dynshmem/`). |
+| `$TEST_TMPDIR/<name>.pg/pg.log` | The server log. |
+
+A second target with the same name (`//a:db` and `//b:db`) in one test fails
+at once, before `initdb`, naming both labels. The claim is shared with
+rules_kind and rules_kubernetes, whose targets also write `<name>.env`. A
+claim left by a launcher that has exited is taken over, and that launcher's
+`<name>.pg` and `<name>.env` are removed first.
+
 **Shutdown.** `SIGTERM` (sent by `rules_itest` after the test) and `SIGINT`
 (for interactive `bazel run` sessions) both call `pg_ctl stop -m fast` then
 exit 0.
@@ -402,12 +443,13 @@ exit 0.
 
 | Attribute | Type | Default | Description |
 |---|---|---|---|
-| `name` | `string` | required | Target name. Also used as the env file stem: `$TEST_TMPDIR/<name>.env`. |
-| `schema` | `label` | required | `postgres_schema` target to apply on startup. |
+| `name` | `string` | required | Target name. Also the stem of `$TEST_TMPDIR/<name>.env`, `<name>.claim` and `<name>.pg/`. |
+| `schema` | `label` | `None` | `postgres_schema` target to apply on startup. `None` (v0.7.0; required before): no migrations, an empty database on `//:pg_default`. |
 | `seed` | `label` | `None` | Optional `pg_seed_data` target loaded after migrations. |
 | `database` | `string` | `"test"` | Name of the database to create. |
 | `pg_user` | `string` | `"postgres"` | Database superuser name. |
 | `pg_password` | `string` | `"postgres"` | Database superuser password. |
+| `config` | `dict` | `{}` | postgresql.conf settings (v0.7.0), written after rules_pg's own, so they override its defaults (`fsync`, `dynamic_shared_memory_type`, ...). Values are strings, written quoted: `{"work_mem": "64MB", "max_connections": "200"}`. A setting PostgreSQL doesn't know fails the start, with the server log. `port`, `listen_addresses`, `unix_socket_directories`, `logging_collector`, `log_destination`, `data_directory`, `config_file`, `hba_file`, `ident_file` and `external_pid_file` are rules_pg's: setting one, a name that isn't a setting name, or a value with a newline fails analysis. |
 
 ---
 
@@ -940,11 +982,29 @@ bazel test //:pg_compat_suite
 
 ## Parallelism and isolation
 
-Every `pg_test` invocation is fully isolated:
+Every `pg_test` invocation is fully isolated, and so is every instance within
+one test:
 
-- **Separate data directory.** `initdb` writes to `$TEST_TMPDIR/pgdata`, which
-  Bazel makes unique per test target invocation. Two simultaneous tests never
-  share a data directory.
+- **Separate data directory.** `initdb` writes to
+  `$TEST_TMPDIR/<name>.pg/pgdata`. Bazel makes `$TEST_TMPDIR` unique per test
+  invocation, and the target name makes the instance unique within it, so
+  two `pg_server`s in one `rules_itest` `service_test`, or a `pg_server` next
+  to a `pg_test`'s own instance, each have their own cluster. (Before v0.7.0
+  every instance used `$TEST_TMPDIR/pgdata`, and a second one in the same
+  test failed in `initdb` or shared the first one's files.)
+- **One target per name.** `$TEST_TMPDIR/<name>.claim` is created atomically
+  (a hard link of a complete file) by the first launcher of a name. A second
+  target with that name in the same test, e.g. `//a:db` next to `//b:db`,
+  fails before `initdb` with both labels in the error.
+- **Nothing outside `$TEST_TMPDIR`.** Dynamic shared memory (parallel query
+  and the like) is `mmap`ed files in `pgdata/pg_dynshmem`, not POSIX segments
+  in `/dev/shm`; Unix-domain sockets are off (TCP on 127.0.0.1 only); the
+  server log is `<name>.pg/pg.log`. `//tests:isolation_*_test` checks this on
+  PostgreSQL 14, 16 and 18. The exceptions are kernel objects: the small
+  System V shared memory segment that every postmaster holds, and, on 14 and
+  15, the POSIX segments `initdb`'s bootstrap backends create and remove
+  (16+ gets `--set dynamic_shared_memory_type=mmap`). `initdb` itself also
+  creates and removes one probe segment to pick a default.
 - **Random port.** The launcher uses `socket.bind(('', 0))` to obtain a free
   port from the OS. On PostgreSQL ≥ 14 the bound socket fd is passed directly
   to `pg_ctl` via `--socket-fd`, so the OS never releases the port before
@@ -1030,7 +1090,9 @@ rules_pg#7).
 **Q: My test takes longer than expected. Where is the time going?**
 
 The dominant cost is `initdb`, which typically takes 0.3–1 s depending on the
-host. This is a fixed per-test overhead. If you have many fast tests that share
+host. It runs with `--no-sync` (v0.7.0): the cluster runs with `fsync = off`
+anyway, and `initdb`'s final fsync of the data directory took tens of seconds
+on a busy disk. This is a fixed per-test overhead. If you have many fast tests that share
 an identical schema, consider grouping them under a single `pg_test` target
 (one cluster, multiple test functions) rather than one target per test.
 
@@ -1051,6 +1113,16 @@ Put the setup in a migration file. `postgres_schema.srcs` accepts any valid
 SQL, including `SET` commands, extension installation (`CREATE EXTENSION
 "uuid-ossp"`), and role creation. If the setup is test-specific rather than
 schema-wide, put it in a `pg_seed_data` target.
+
+---
+
+**Q: How do I change a postgresql.conf setting?**
+
+`config` on `pg_server` or `pg_test` (v0.7.0):
+`config = {"max_connections": "300", "shared_preload_libraries": "pg_stat_statements"}`.
+The settings are appended after rules_pg's own, so they win. To go back to
+POSIX dynamic shared memory: `{"dynamic_shared_memory_type": "posix"}` (the
+segments are then in `/dev/shm`).
 
 ---
 
