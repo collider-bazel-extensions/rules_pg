@@ -388,8 +388,13 @@ btrfs (0.4 s without).
 outside it; `isolation_{14,16,18}_test` run a `pg_server` from a read-only
 working directory, HOME and TMPDIR, make it write tables, an index, a spilled
 sort, a temp table, a checkpoint and a parallel query, check that no process
-of the instance maps a file under `/dev/shm`, and then that no file outside
-`$TEST_TMPDIR` is newer than a marker. What remains is kernel state: the
+of the instance maps a file under `/dev/shm` (through `/proc/<pid>/maps`,
+which attributes exactly), and then that no file outside `$TEST_TMPDIR` is
+newer than a marker: anywhere in the working directory and runfiles tree, and
+by name (`postgres|pgsql|/pg|rules_pg`) in `/tmp`, `/var/tmp` and `/dev/shm`,
+which are host-wide under the processwrapper sandbox of GitHub's runners and
+see other builds' and tests' files. A `/dev/shm` segment that is gone 2 s
+later is another test's `initdb` (14/15) and is ignored. What remains is kernel state: the
 postmaster's small System V shared memory segment (an IPC key, not a file),
 and transient POSIX segments created and removed by `initdb` (one probe to
 choose a default; on 14 and 15, which lack `initdb --set`, also its bootstrap

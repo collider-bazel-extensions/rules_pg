@@ -108,13 +108,16 @@ trap 'chmod 755 "$ro"' EXIT
 echo "OK: stopped"
 
 # Nothing newer than the marker outside $TEST_TMPDIR, wherever the instance
-# could write: the working directory and runfiles tree, /tmp (the sandbox's
-# own), and, by name, the host-shared /var/tmp and /dev/shm.
+# could write: the working directory and runfiles tree, and, by name, /tmp,
+# /var/tmp and /dev/shm. /tmp is filtered too: it is the host's under the
+# processwrapper sandbox (GitHub's runners), where concurrent builds write
+# to it; the server's TMPDIR is read-only anyway, so only a hard-coded /tmp
+# path (e.g. a socket lock file, /tmp/.s.PGSQL.<port>.lock) could land there.
 outside=()
 for d in "$PWD" "$TEST_SRCDIR" /tmp /var/tmp /dev/shm; do
     [[ -d "$d" ]] || continue
     filter=(cat)
-    [[ "$d" == /var/tmp || "$d" == /dev/shm ]] && filter=(grep -iE 'postgres|pgsql|/pg')
+    [[ "$d" == /tmp || "$d" == /var/tmp || "$d" == /dev/shm ]] && filter=(grep -iE 'postgres|pgsql|/pg|rules_pg')
     while IFS= read -r f; do outside+=("$f"); done < <(
         find "$d" -xdev \( -path "$TEST_TMPDIR" -o -path "$TEST_TMPDIR/*" \) -prune -o -newer "$marker" \
             ! -type d -user "$(id -u)" -print 2>/dev/null | "${filter[@]}" || true)
