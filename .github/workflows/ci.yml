@@ -46,6 +46,18 @@ jobs:
       - name: bazel test //tests/...
         run: bazel test //tests/... --test_output=errors
 
+      # The multi-instance and isolation tests (v0.7.0) check the runner
+      # itself (/dev/shm, /tmp, processes), so a cached pass from another
+      # runner says nothing: always run them.
+      - name: isolation tests (never cached)
+        run: |
+          bazel test --nocache_test_results --test_output=all \
+            //tests:two_servers_test \
+            //tests:same_name_clash_test \
+            //tests:isolation_14_test \
+            //tests:isolation_16_test \
+            //tests:isolation_18_test
+
       - name: Upload test logs on failure
         if: failure()
         uses: actions/upload-artifact@v4

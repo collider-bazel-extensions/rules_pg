@@ -1,0 +1,9 @@
+load("@rules_pg//:defs.bzl", "pg_server")
+
+# Same target name as //tests:two_a: same_name_clash_test starts this next to
+# it in one test and expects it to fail at once, naming both.
+pg_server(
+    name = "two_a",
+    tags = ["manual"],
+    visibility = ["//tests:__pkg__"],
+)

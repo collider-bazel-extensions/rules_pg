@@ -2,6 +2,7 @@
 
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//private:binary.bzl", "PostgresBinaryInfo")
+load("//private:config.bzl", "CONFIG_DOC", "check_config", "label_string")
 load("//private:schema.bzl", "PostgresSchemaInfo")
 load("//private:seed.bzl", "PostgresSeedInfo")
 
@@ -13,6 +14,8 @@ load("//private:seed.bzl", "PostgresSeedInfo")
 _SUPPORTED_VERSIONS = ["14", "15", "16", "17", "18"]
 
 def _pg_launcher_impl(ctx):
+    label = label_string(ctx.label)
+    check_config("pg_test " + label, ctx.attr.config)
     schema_info = ctx.attr.schema[PostgresSchemaInfo]
     # pg_test's postgres_version sets `binary`; otherwise use the schema's.
     if ctx.attr.binary:
@@ -42,6 +45,11 @@ def _pg_launcher_impl(ctx):
         database    = ctx.attr.database,
         pg_user     = ctx.attr.pg_user,
         pg_password = ctx.attr.pg_password,
+        config      = ctx.attr.config,
+        # The instance: $TEST_TMPDIR/<name>.pg, claimed by <name>.claim.
+        name        = ctx.label.name,
+        label       = label,
+        rule        = "pg_test",
     )
     manifest = ctx.actions.declare_file(ctx.label.name + "_pg_manifest.json")
     ctx.actions.write(
@@ -108,9 +116,10 @@ _pg_launcher_test = rule(
     doc = "Internal rule. Use the pg_test macro instead.",
     attrs = {
         "schema": attr.label(
-            mandatory = True,
+            default = Label("//:empty_schema"),
             providers = [PostgresSchemaInfo],
         ),
+        "config": attr.string_dict(doc = CONFIG_DOC),
         "seed": attr.label(
             mandatory = False,
             providers = [PostgresSeedInfo],
@@ -151,7 +160,7 @@ _pg_launcher_test = rule(
 
 def pg_test(
         name,
-        schema,
+        schema = None,
         srcs = None,
         deps = None,
         seed = None,
@@ -159,6 +168,7 @@ def pg_test(
         database = "test",
         pg_user = "postgres",
         pg_password = "postgres",
+        config = None,
         size = "medium",
         timeout = None,
         tags = None,
@@ -168,7 +178,7 @@ def pg_test(
 
     Wraps any *_test rule (default: sh_test; pass test_rule= for others) with
     a launcher that:
-      1. initdb's a fresh cluster in $TEST_TMPDIR
+      1. initdb's a fresh cluster in $TEST_TMPDIR/<name>.pg
       2. Starts postgres on a random free port
       3. Applies schema migrations in order
       4. Optionally loads seed data
@@ -178,7 +188,8 @@ def pg_test(
 
     Args:
         name:             Target name.
-        schema:           Label of a postgres_schema target (required).
+        schema:           Label of a postgres_schema target. Default None:
+                          no migrations, an empty database.
         srcs:             Test source files (forwarded to test_rule).
         deps:             Test dependencies (forwarded to test_rule).
         seed:             Optional label of a pg_seed_data target.
@@ -189,6 +200,8 @@ def pg_test(
         database:         Database name created for the test. Default "test".
         pg_user:          Superuser name. Default "postgres".
         pg_password:      Superuser password. Default "postgres".
+        config:           postgresql.conf settings, {"name": "value"},
+                          written after rules_pg's own. See pg_server.
         size:             Bazel test size. Default "medium".
         timeout:          Bazel test timeout override.
         tags:             Extra tags. "requires-network" is NOT added automatically.
@@ -246,6 +259,7 @@ def pg_test(
         database    = database,
         pg_user     = pg_user,
         pg_password = pg_password,
+        config  = config or {},
         data    = data,
         size    = size,
         timeout = timeout,

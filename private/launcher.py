@@ -7,6 +7,13 @@ Two modes, selected by RULES_PG_MODE (default: "test"):
   test   — initdb → migrate → seed → exec test binary; atexit stop (best-effort)
   server — initdb → migrate → seed → write env file → block until SIGTERM/SIGINT → stop
 
+Everything an instance writes is under $TEST_TMPDIR (v0.7.0):
+
+  $TEST_TMPDIR/<name>.claim      who owns <name> in this test (JSON)
+  $TEST_TMPDIR/<name>.pg/pgdata  the cluster (dynamic shared memory included)
+  $TEST_TMPDIR/<name>.pg/pg.log  the server log
+  $TEST_TMPDIR/<name>.env        connection details (pg_server only)
+
 Never imported; always exec'd by a wrapper shell script.
 """
 
@@ -15,6 +22,7 @@ import dataclasses
 import json
 import os
 import platform
+import shutil
 import signal
 import socket
 import subprocess
@@ -182,6 +190,131 @@ def _copy_csv(psql_bin: str, host: str, port: int, user: str, database: str,
 
 
 # ---------------------------------------------------------------------------
+# Claims: one target per name in a $TEST_TMPDIR
+#
+# Same approach and file format as rules_kind / rules_kubernetes, so a
+# pg_server and a kind_cluster with the same name (which would share
+# <name>.env) see each other too.
+# ---------------------------------------------------------------------------
+
+# Settings _pg_setup writes and depends on; keep in sync with
+# private/config.bzl's RESERVED_SETTINGS, which rejects them in `config`.
+_RESERVED = (
+    "port", "listen_addresses", "unix_socket_directories", "logging_collector",
+    "log_destination", "data_directory", "config_file", "hba_file",
+    "ident_file", "external_pid_file",
+)
+
+
+def _proc_start_time(pid):
+    """Start time of `pid` in clock ticks since boot (field 22 of
+    /proc/<pid>/stat), or None if the process is gone. With the pid it
+    identifies a process even if the pid is reused."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            stat = f.read()
+    except OSError:
+        return None
+    # Field 2 (comm) may contain spaces; the fields after it follow the last ")".
+    return stat[stat.rindex(")") + 2:].split()[19]
+
+
+def _boot_id():
+    try:
+        with open("/proc/sys/kernel/random/boot_id") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _claim_alive(claim, pid):
+    """True if the process that wrote `claim` may still run."""
+    if "start_time" in claim and os.path.exists("/proc/self/stat"):
+        return (bool(claim.get("boot_id")) and claim.get("boot_id") == _boot_id()
+                and _proc_start_time(pid) == claim["start_time"])
+    if os.path.exists("/proc/self/stat"):
+        return _proc_start_time(pid) is not None
+    return _pid_alive(pid)  # macOS: no /proc
+
+
+class ClaimError(Exception):
+    pass
+
+
+def _claim_name(base_dir: str, name: str, label: str, rule: str) -> str:
+    """Claim `<name>` in `base_dir` ($TEST_TMPDIR) for this target.
+
+    Two targets with the same name (`//a:db` and `//b:db`) in one test would
+    share $TEST_TMPDIR/<name>.pg and <name>.env; the second fails here, at
+    once and before initdb, naming both. A claim whose launcher has exited is
+    taken over.
+
+    The claim is $TEST_TMPDIR/<name>.claim, created atomically (a hard link
+    of a complete temp file), holding {"label", "pid", "rule"} plus the
+    process start time and boot id, which make the liveness check immune to
+    pid reuse. In test mode the launcher execs the test with the same pid, so
+    the claim stays live for the whole test.
+    """
+    path = os.path.join(base_dir, f"{name}.claim")
+    pid = os.getpid()
+    mine = {"label": label, "pid": pid, "rule": rule,
+            "boot_id": _boot_id(), "start_time": _proc_start_time(pid)}
+    tmp = f"{path}.{pid}.tmp"
+    with open(tmp, "w") as f:
+        json.dump(mine, f)
+    try:
+        for _ in range(5):
+            try:
+                os.link(tmp, path)
+                return path
+            except FileExistsError:
+                pass
+            try:
+                with open(path) as f:
+                    other = json.load(f)
+                other_pid = int(other["pid"])
+            except FileNotFoundError:
+                continue
+            except (OSError, ValueError, KeyError, TypeError):
+                other, other_pid = {}, None
+            if other_pid == pid:
+                return path
+            alive = True if other_pid is None else _claim_alive(other, other_pid)
+            if alive:
+                holder = other.get("label") or "another launcher"
+                what = f"{other['rule']} " if other.get("rule") else ""
+                who = (f"{what}{holder} (pid {other_pid})" if other_pid
+                       else f"{holder} ({path} is unreadable)")
+                raise ClaimError(
+                    f"{rule} {label}: the name {name} ($TEST_TMPDIR/{name}.pg, "
+                    f"{name}.env) is already used by {who} in this test; "
+                    f"give the targets different names")
+            _log(f"taking over the claim on {name} from exited pid {other_pid}")
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+        raise ClaimError(f"{rule} {label}: could not claim {path}")
+    finally:
+        os.remove(tmp)
+
+
+def _conf_value(value: str) -> str:
+    """A postgresql.conf string literal."""
+    return "'" + value.replace("\\", "\\\\").replace("'", "''") + "'"
+
+
+# ---------------------------------------------------------------------------
 # Runtime state
 # ---------------------------------------------------------------------------
 
@@ -221,6 +354,35 @@ def _pg_setup(m: dict) -> _PgState:
     database    = m.get("database", "test")
     pg_user     = m.get("pg_user", "postgres")
     pg_password = m.get("pg_password", "postgres")
+    config      = m.get("config", {})
+    name        = m.get("name") or "pg"
+    label       = m.get("label") or name
+    rule        = m.get("rule") or "pg_test"
+
+    for key in config:
+        if key.lower() in _RESERVED:
+            sys.exit(f"[rules_pg] {rule} {label}: config: {key.lower()} is set by rules_pg")
+
+    test_tmpdir = os.environ.get("TEST_TMPDIR") or tempfile.mkdtemp(prefix="rules_pg_")
+    try:
+        _claim_name(test_tmpdir, name, label, rule)
+    except ClaimError as e:
+        _log(f"ERROR: {e}")
+        sys.exit(1)
+
+    # The claim is ours, so anything left here is from an exited launcher of
+    # this target (e.g. a restarted service): start clean.
+    instance_dir = os.path.join(test_tmpdir, f"{name}.pg")
+    if os.path.exists(instance_dir):
+        _log(f"removing {instance_dir} left by an exited launcher")
+        shutil.rmtree(instance_dir)
+    output_env_file = os.environ.get("RULES_PG_OUTPUT_ENV_FILE")
+    if output_env_file:
+        for stale in (output_env_file, output_env_file + ".tmp"):
+            try:
+                os.remove(stale)
+            except OSError:
+                pass
 
     pg_lib_dir = os.path.join(os.path.dirname(os.path.dirname(pg_ctl)), "lib")
 
@@ -232,9 +394,8 @@ def _pg_setup(m: dict) -> _PgState:
         actual_pg_version = pg_version
     _log(f"Detected PostgreSQL binary version: {actual_pg_version}")
 
-    test_tmpdir = os.environ.get("TEST_TMPDIR") or tempfile.mkdtemp(prefix="rules_pg_")
-    pgdata = os.path.join(test_tmpdir, "pgdata")
-    pg_log = os.path.join(test_tmpdir, "pg.log")
+    pgdata = os.path.join(instance_dir, "pgdata")
+    pg_log = os.path.join(instance_dir, "pg.log")
     os.makedirs(pgdata, exist_ok=True)
     os.chmod(pgdata, 0o700)
 
@@ -260,17 +421,26 @@ def _pg_setup(m: dict) -> _PgState:
         and os.environ.get("RULES_PG_DISABLE_SOCKET_FD") != "1"
     )
 
+    initdb_cmd = [
+        initdb_bin,
+        "-D", pgdata,
+        "-U", pg_user,
+        "--no-locale",
+        "--encoding=UTF8",
+        "--auth=scram-sha-256",
+        "--pwfile=/dev/stdin",
+        # The cluster runs with fsync = off; initdb's final fsync of the
+        # whole data directory is pure cost (tens of seconds on a busy disk).
+        "--no-sync",
+    ]
+    if actual_pg_version >= 16:
+        # initdb's own bootstrap backends (PG 16+ has --set): their dynamic
+        # shared memory under pgdata too, not /dev/shm.
+        initdb_cmd += ["--set", "dynamic_shared_memory_type=mmap"]
+
     _log(f"Running initdb in {pgdata}")
     subprocess.run(
-        [
-            initdb_bin,
-            "-D", pgdata,
-            "-U", pg_user,
-            "--no-locale",
-            "--encoding=UTF8",
-            "--auth=scram-sha-256",
-            "--pwfile=/dev/stdin",
-        ],
+        initdb_cmd,
         input=pg_password.encode(),
         check=True,
         stdout=subprocess.DEVNULL,
@@ -290,6 +460,13 @@ def _pg_setup(m: dict) -> _PgState:
         cf.write("logging_collector = off\n")
         cf.write("log_destination = 'stderr'\n")
         cf.write("unix_socket_directories = ''\n")
+        # Dynamic shared memory (parallel query, ...) in pgdata/pg_dynshmem,
+        # not /dev/shm/PostgreSQL.* (the posix default) outside $TEST_TMPDIR.
+        cf.write("dynamic_shared_memory_type = mmap\n")
+        if config:
+            cf.write("# config\n")
+            for key, value in config.items():
+                cf.write(f"{key} = {_conf_value(value)}\n")
 
     start_cmd = [pg_ctl, "start", "-D", pgdata, "-l", pg_log, "-w"]
     if use_socket_fd:

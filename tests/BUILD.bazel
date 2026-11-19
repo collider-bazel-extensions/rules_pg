@@ -1,5 +1,7 @@
-load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("@rules_itest//:itest.bzl", "itest_service", "service_test")
 load("@rules_pg//:defs.bzl", "pg_health_check", "pg_seed_data", "pg_server", "pg_test", "postgres_schema")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load(":analysis_tests.bzl", "analysis_test_suite")
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -242,3 +244,163 @@ sh_test(
     size = "medium",
     tags = ["pg"],
 ) for v in ["16", "17", "18"]]
+
+# ---------------------------------------------------------------------------
+# No schema / an empty schema (v0.7.0): `schema` is optional and
+# postgres_schema's `srcs` may be empty.
+# ---------------------------------------------------------------------------
+
+postgres_schema(name = "empty_schema")
+
+postgres_schema(
+    name = "empty_schema_14",
+    binary = "//:pg_14",
+)
+
+postgres_schema(
+    name = "empty_schema_18",
+    binary = "//:pg_18",
+)
+
+pg_test(
+    name = "no_schema_test",
+    srcs = ["empty_schema_test.sh"],
+    args = ["no_schema_test"],
+    size = "medium",
+    tags = ["pg"],
+)
+
+pg_test(
+    name = "empty_schema_test",
+    srcs = ["empty_schema_test.sh"],
+    args = ["empty_schema_test"],
+    schema = ":empty_schema",
+    size = "medium",
+    tags = ["pg"],
+)
+
+# ---------------------------------------------------------------------------
+# postgresql.conf settings (v0.7.0)
+# ---------------------------------------------------------------------------
+
+pg_test(
+    name = "config_test",
+    srcs = ["config_test.sh"],
+    config = {
+        "work_mem": "7MB",
+        "cluster_name": "rules_pg's test",
+        "max_connections": "42",
+        "synchronous_commit": "on",
+    },
+    size = "medium",
+    tags = ["pg"],
+)
+
+analysis_test_suite(name = "analysis_tests")
+
+# ---------------------------------------------------------------------------
+# Two pg_servers and a pg_test's own instance in one rules_itest
+# service_test (v0.7.0): each has its own $TEST_TMPDIR/<name>.pg.
+# ---------------------------------------------------------------------------
+
+[
+    pg_server(
+        name = n,
+        schema = ":test_schema",
+        tags = ["manual"],
+    )
+    for n in ["two_a", "two_b"]
+]
+
+[
+    pg_health_check(
+        name = n + "_health",
+        server = ":" + n,
+        tags = ["manual"],
+    )
+    for n in ["two_a", "two_b"]
+]
+
+[
+    itest_service(
+        name = n + "_svc",
+        exe = ":" + n,
+        health_check = ":" + n + "_health",
+        tags = ["manual"],
+    )
+    for n in ["two_a", "two_b"]
+]
+
+pg_test(
+    name = "two_servers_check",
+    srcs = ["two_servers_test.sh"],
+    schema = ":test_schema",
+    tags = ["manual"],
+)
+
+service_test(
+    name = "two_servers_test",
+    services = [
+        ":two_a_svc",
+        ":two_b_svc",
+    ],
+    test = ":two_servers_check",
+    size = "medium",
+    tags = ["pg"],
+)
+
+# A pg_server with the same name as :two_a, from another package, fails at
+# once and names both.
+sh_test(
+    name = "same_name_clash_test",
+    srcs = ["same_name_clash_test.sh"],
+    args = [
+        "$(rootpath :two_a)",
+        "$(rootpath //tests/clash:two_a)",
+    ],
+    data = [
+        ":two_a",
+        "//tests/clash:two_a",
+    ],
+    size = "medium",
+    tags = ["pg"],
+)
+
+# ---------------------------------------------------------------------------
+# Nothing is written outside $TEST_TMPDIR (v0.7.0), on the oldest, default
+# and newest majors.
+# ---------------------------------------------------------------------------
+
+pg_server(
+    name = "isolation_server",
+    tags = ["manual"],
+)
+
+[
+    pg_server(
+        name = "isolation_server_" + v,
+        schema = ":empty_schema_" + v,
+        tags = ["manual"],
+    )
+    for v in ["14", "18"]
+]
+
+[
+    sh_test(
+        name = "isolation_{}_test".format(v),
+        srcs = ["isolation_test.sh"],
+        args = [
+            "$(rootpath :{})".format(server),
+            server,
+            v,
+        ],
+        data = [":" + server],
+        size = "medium",
+        tags = ["pg"],
+    )
+    for v, server in [
+        ("14", "isolation_server_14"),
+        ("16", "isolation_server"),
+        ("18", "isolation_server_18"),
+    ]
+]
